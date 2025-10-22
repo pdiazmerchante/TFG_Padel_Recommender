@@ -1,0 +1,28 @@
+# === ENTORNOS Y TEMPORALES ===
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+
+# === DATOS ===
+data/raw/*
+data/interim/*
+data/processed/*
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+
+# === OUTPUTS Y MODELOS ===
+outputs/
+models/
+reports/
+
+# === CONFIGURACIONES SENSIBLES ===
+.env
+*.key
+*.pem
+
+# === ARCHIVOS DE LOG ===
+*.log

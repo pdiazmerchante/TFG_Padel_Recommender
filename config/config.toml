@@ -1,0 +1,18 @@
+[paths]
+raw_dir = "data/raw"
+interim_dir = "data/interim"
+processed_dir = "data/processed"
+
+[data]
+separator = ";"
+encoding = "utf-8"
+infer_dtypes = true
+add_source_column = true      # añade columna con el nombre del archivo
+glob_pattern = "*.csv"        # así pasamos de 1 a N CSV sin tocar código
+
+[read_csv]
+on_bad_lines = "skip"         # o "error"
+low_memory = true
+
+[repro]
+seed = 42

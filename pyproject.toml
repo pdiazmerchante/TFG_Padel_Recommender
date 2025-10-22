@@ -1,0 +1,19 @@
+[project]
+name = "tfg_padel"
+version = "0.1.0"
+description = "Sistema de recomendación para pádel (TFG URJC)"
+authors = [{ name = "Pablo Díaz Merchante" }]
+readme = "README.md"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
+
