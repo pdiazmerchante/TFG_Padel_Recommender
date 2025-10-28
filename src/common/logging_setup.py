@@ -10,4 +10,4 @@ def setup_logging(level=logging.INFO):
         datefmt="%H:%M:%S",
         force=True,
     )
-    return logging.getLogger("tfg")
+    return logging.getLogger("TFG")
