@@ -56,41 +56,142 @@ def cargar_datos(ruta=None):
 
 def recortar_por_marcador(df, limite_juegos):
     df = df.sort_values("clip_start").reset_index(drop=True)
-    df["juego_p1"] = pd.to_numeric(df["juego_p1"], errors="coerce").fillna(0).astype(int)
-    df["juego_p2"] = pd.to_numeric(df["juego_p2"], errors="coerce").fillna(0).astype(int)
+    df["juego_p1_int"] = pd.to_numeric(df["juego_p1"], errors="coerce").fillna(0).astype(int)
+    df["juego_p2_int"] = pd.to_numeric(df["juego_p2"], errors="coerce").fillna(0).astype(int)
 
-    idx_fin = None
-    for i, row in df.iterrows():
-        if (row["juego_p1"] + row["juego_p2"]) >= limite_juegos:
-            idx_fin = i
-            break
-    if idx_fin is None:
+    j1 = df["juego_p1_int"]
+    j2 = df["juego_p2_int"]
+
+    j1_prev = j1.shift(1).fillna(0).astype(int)
+    j2_prev = j2.shift(1).fillna(0).astype(int)
+    
+    # 1. Detección de Reseteo (Inicio de Nuevo Set)
+    condicion_inicio_nuevo_set = (j1 <= 1) & (j2 <= 1)
+    
+    # 2. Condición de Fin de Set (en la fila ANTERIOR)
+    condicion_set_terminado_prev = (
+        ((j1_prev >= 6) | (j2_prev >= 6)) & 
+        (abs(j1_prev - j2_prev) >= 2)
+    )
+    
+    # 3. Inferir Fin de Set
+    # Caso 1: Fin de set explícito en la fila anterior (ej. 6-3)
+    df["juegos_finalizados_inferidos"] = 0
+    df.loc[condicion_inicio_nuevo_set & condicion_set_terminado_prev, "juegos_finalizados_inferidos"] = j1_prev + j2_prev
+
+    # Caso 2 (Tu lógica): Fin de set *inferido* (ej. 5-3, pero luego viene 0-0)
+    # Buscamos reseteo Y que el marcador anterior NO cumpliera el fin de set
+    condicion_set_no_terminado_prev = ~condicion_set_terminado_prev
+
+    condicion_inferencia_necesaria = condicion_inicio_nuevo_set & condicion_set_no_terminado_prev
+    
+    # Inferimos el marcador final y los juegos. 
+    # El ganador es el que llevaba más juegos. El marcador final será el del ganador + 1.
+    def inferir_juegos(row):
+        # Si p1 > p2, el marcador final es (p1+1) + p2, o 6 + p2 si p1 < 5.
+        p1, p2 = row["juego_p1_int_prev"], row["juego_p2_int_prev"]
+        
+        # Debe haber un ganador claro, o al menos un juego avanzado.
+        if p1 + p2 == 0:
+            return 0 # No hay juegos jugados
+            
+        if p1 > p2:
+            final_p1 = max(6, p1 + 1) # Asumimos al menos 6
+            final_p2 = p2
+        elif p2 > p1:
+            final_p1 = p1
+            final_p2 = max(6, p2 + 1)
+        else: # Empate (ej. 5-5). Imposible de inferir el 7-5 o 7-6/6-7 sin más datos. Lo dejamos en 0.
+            return 0
+            
+        # Nos aseguramos de la diferencia mínima de 2 juegos para terminar el set, o 7-5, 7-6, etc.
+        if abs(final_p1 - final_p2) >= 2 or (final_p1 == 7 and final_p2 in [5, 6]) or (final_p2 == 7 and final_p1 in [5, 6]):
+            return final_p1 + final_p2
+        return 0 # No se puede inferir con seguridad
+    
+    # Creamos un DF temporal para aplicar la función con shift
+    df_temp = pd.DataFrame({'juego_p1_int_prev': j1_prev, 'juego_p2_int_prev': j2_prev})
+    juegos_inferidos = df_temp.apply(inferir_juegos, axis=1)
+
+    # Solo aplicamos la inferencia donde es necesaria (Caso 2)
+    df.loc[condicion_inferencia_necesaria, "juegos_finalizados_inferidos"] = juegos_inferidos
+    
+    # 4. Acumulación y Total (Igual que antes)
+    df["juegos_acumulados_sets"] = df["juegos_finalizados_inferidos"].cumsum()
+    df["juegos_totales_acumulados"] = df["juegos_acumulados_sets"] + j1 + j2
+
+    # 5. Recorte (Vectorizado)
+    condicion_limite = df["juegos_totales_acumulados"] >= limite_juegos
+
+    if condicion_limite.any():
+        idx_fin = condicion_limite.idxmax()
+    else:
         idx_fin = len(df) - 1
 
     return df.loc[:idx_fin].reset_index(drop=True)
 
 
 def calcular_marcador_y_sets(df):
-    set_p1 = set_p2 = 0
+    set_p1 = 0
+    set_p2 = 0
     sets_resultados = []
 
-    for i in range(1, len(df)):
-        j1, j2 = int(df.loc[i, "juego_p1"]), int(df.loc[i, "juego_p2"])
-        if (j1 >= 6 or j2 >= 6) and abs(j1 - j2) >= 2:
-            ganador = "p1" if j1 > j2 else "p2"
-            if ganador == "p1":
-                set_p1 += 1
-            else:
-                set_p2 += 1
-            sets_resultados.append((j1, j2))
+    # Se asume que el DataFrame recortado contiene las columnas auxiliares de la función V4 anterior:
+    # 'juego_p1_int', 'juego_p2_int', 'juego_p1_int_prev', 'juego_p2_int_prev', 'juegos_finalizados_inferidos'
 
+    # 1. Identificar las filas que marcan el final de un set (donde el contador de juegos fue sumado)
+    sets_terminados_df = df[df["juegos_finalizados_inferidos"] > 0]
+
+    # Iterar sobre las filas de reseteo para reconstruir el marcador del set
+    for _, row in sets_terminados_df.iterrows():
+        # Valores de la fila ANTERIOR (donde terminó el set)
+        j1_prev = row["juego_p1_int_prev"]
+        j2_prev = row["juego_p2_int_prev"]
+        
+        # Juegos totales que se sumaron al acumulado (incluye el juego inferido)
+        juegos_sumados = row["juegos_finalizados_inferidos"]
+
+        # Determinar el marcador final del set (P1-P2)
+        # Si el set fue contado de forma explícita (ej. 6-3)
+        if (j1_prev + j2_prev) == juegos_sumados:
+            final_p1, final_p2 = j1_prev, j2_prev
+            
+        # Si el set fue INFERIDO (el marcador anterior era 5-3, pero se sumó 9 juegos totales)
+        else:
+            # P1 es el ganador inferido
+            if j1_prev > j2_prev:
+                # El marcador de P1 es: juegos_sumados - juegos_P2_rival. (Ej: 9 - 3 = 6)
+                final_p1 = juegos_sumados - j2_prev
+                final_p2 = j2_prev
+            # P2 es el ganador inferido
+            elif j2_prev > j1_prev:
+                # El marcador de P2 es: juegos_sumados - juegos_P1_rival.
+                final_p1 = j1_prev
+                final_p2 = juegos_sumados - j1_prev
+            else:
+                # En caso de empate (ej. 5-5) donde se asumió 0 juegos inferidos por seguridad, 
+                # esto no debería activarse, pero si lo hace, no contamos el set.
+                final_p1, final_p2 = 0, 0
+        
+        # 2. Conteo y Registro del Set
+        if final_p1 > final_p2:
+            set_p1 += 1
+            sets_resultados.append((final_p1, final_p2))
+        elif final_p2 > final_p1:
+            set_p2 += 1
+            sets_resultados.append((final_p1, final_p2))
+
+
+    # 3. Marcador de Juegos Actual: siempre es el de la última fila del DF recortado
     ult = df.iloc[-1]
+    
     marcador = {
         "set_p1": set_p1,
         "set_p2": set_p2,
-        "juego_p1": safe_int(ult["juego_p1"]),
-        "juego_p2": safe_int(ult["juego_p2"]),
+        "juego_p1": ult["juego_p1_int"],
+        "juego_p2": ult["juego_p2_int"],
     }
+    
     return marcador, sets_resultados
 
 
