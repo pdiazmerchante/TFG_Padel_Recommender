@@ -145,12 +145,19 @@ def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
     df = standardize_columns(df)
 
     # 2️⃣ Reemplazar valores vacíos / falsos nulos
-    #df = df.replace(["", "NA", "na", "null", "None"], np.nan)
+    # df = df.replace(["", "NA", "na", "null", "None"], np.nan)
 
     # 3️⃣ Eliminar duplicados exactos
     df = df.drop_duplicates()
 
-    # 6️⃣ Ajustar tipos de datos modernos (pandas 2.x)
+    # 4️⃣ Eliminar columnas que contengan ':time' en el nombre
+    cols_a_eliminar = [c for c in df.columns if ":time" in c.lower()]
+    if cols_a_eliminar:
+        print(f"🧹 Eliminando columnas con ':time': {cols_a_eliminar}")
+        df = df.drop(columns=cols_a_eliminar)
+
+    # 5️⃣ Ajustar tipos de datos modernos (pandas 2.x)
     df = df.convert_dtypes()
 
     return df
+

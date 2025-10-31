@@ -253,17 +253,76 @@ def top_golpes_por_jugador(df, output_dir, top_n=5):
         plt.savefig(os.path.join(output_dir, f"top_golpes_{jug}.png"), dpi=300)
         plt.close()
 
+# ======================================================
+# DETECCIÓN AUTOMÁTICA DE COLUMNAS DE COORDENADAS
+# ======================================================
+
+def detectar_columnas_coordenadas(df):
+    """
+    Detecta automáticamente los nombres correctos de columnas
+    para inicio_x, inicio_y, fin_x, fin_y, incluso si hay typos como 'gople' o ':'.
+    """
+    posibles_nombres = {
+    "inicio_x": ["inicio_gople:_x", "inicio_gople_x", "inicio_golpe:_x", "inicio_golpe_x"],
+    "inicio_y": ["inicio_gople:_y", "inicio_gople_y", "inicio_golpe:_y", "inicio_golpe_y"],
+    "fin_x":    ["fin_gople:_x", "fin_gople_x", "fin_golpe:_x", "fin_golpe_x"],
+    "fin_y":    ["fin_gople:_y", "fin_gople_y", "fin_golpe:_y", "fin_golpe_y"]
+}
+
+
+    encontrados = {}
+    for clave, lista in posibles_nombres.items():
+        for nombre in lista:
+            if nombre in df.columns:
+                encontrados[clave] = nombre
+                break
+        if clave not in encontrados:
+            encontrados[clave] = None  # si no se encuentra
+
+    #print("🧭 Columnas detectadas automáticamente:")
+    for k, v in encontrados.items():
+        print(f"  {k}: {v}")
+
+    return encontrados
+
+
 def pintar_pista_interactiva(df, output_dir="outputs/html_pistas"):
+    import os
+    import plotly.graph_objects as go
+
+    # Asegurarse de que la carpeta exista
     os.makedirs(output_dir, exist_ok=True)
-    for jugador in df[COL_JUGADOR].dropna().unique():
+    print(f"🎾 Guardando pistas interactivas en: {os.path.abspath(output_dir)}")
+
+    jugadores = df[COL_JUGADOR].dropna().unique().tolist()
+    print(f"👥 Jugadores detectados: {jugadores}")
+
+    for jugador in jugadores:
         sub = df[df[COL_JUGADOR] == jugador].dropna(subset=[COL_INICIO_X, COL_INICIO_Y, COL_FIN_X, COL_FIN_Y])
         if sub.empty:
+            print(f"⚠️ Sin coordenadas válidas para {jugador}, no se genera pista.")
             continue
+
+        # Crear figura
         fig = go.Figure()
-        fig.add_shape(type="rect", x0=0, y0=0, x1=ANCHO_PISTA, y1=LARGO_PISTA, line=dict(color="white", width=2))
-        fig.add_shape(type="line", x0=0, y0=100, x1=ANCHO_PISTA, y1=100, line=dict(color="white", width=3))
+
+        # Dibujar la pista
+        fig.add_shape(
+            type="rect",
+            x0=0, y0=0, x1=ANCHO_PISTA, y1=LARGO_PISTA,
+            line=dict(color="white", width=2)
+        )
+        fig.add_shape(
+            type="line",
+            x0=0, y0=LARGO_PISTA/2, x1=ANCHO_PISTA, y1=LARGO_PISTA/2,
+            line=dict(color="white", width=3)
+        )
+
+        # Dibujar trayectorias por categoría
         for cat, color in COLORES_EVENTO.items():
             df_cat = sub[sub["categoria"] == cat]
+            if df_cat.empty:
+                continue
             for _, r in df_cat.iterrows():
                 fig.add_trace(go.Scatter(
                     x=[r[COL_INICIO_X], r[COL_FIN_X]],
@@ -271,17 +330,28 @@ def pintar_pista_interactiva(df, output_dir="outputs/html_pistas"):
                     mode="lines+markers",
                     line=dict(color=color, width=2),
                     marker=dict(size=5),
-                    name=cat
+                    name=cat,
+                    hovertext=f"{cat} ({jugador})"
                 ))
+
+        # Configuración visual
         fig.update_layout(
             title=f"Pista — {jugador}",
             plot_bgcolor="#003C77",
             paper_bgcolor="#00244D",
             xaxis=dict(visible=False, range=[0, ANCHO_PISTA]),
             yaxis=dict(visible=False, range=[0, LARGO_PISTA], scaleanchor="x", scaleratio=1),
-            font=dict(color="white")
+            font=dict(color="white"),
+            showlegend=True
         )
-        fig.write_html(os.path.join(output_dir, f"pista_{jugador}.html"))
+
+        # Ruta de guardado
+        salida_html = os.path.join(output_dir, f"pista_{jugador}.html")
+        fig.write_html(salida_html)
+        print(f"✅ Archivo generado: {os.path.abspath(salida_html)}")
+
+    print("✅ Finalizado: pistas interactivas creadas correctamente.")
+
 
 # ======================================================
 # DIRECTORIO DE SALIDA
@@ -349,6 +419,18 @@ def analizar_partido_interactivo():
 
         # === 8️⃣ Visualizaciones ===
         top_golpes_por_jugador(df_rec, output_dir=out_dir)
+        # === Detectar columnas de coordenadas automáticamente ===
+        col_map = detectar_columnas_coordenadas(df_rec)
+
+        # Actualizar variables globales
+        global COL_INICIO_X, COL_INICIO_Y, COL_FIN_X, COL_FIN_Y
+        if col_map["inicio_x"]: COL_INICIO_X = col_map["inicio_x"]
+        if col_map["inicio_y"]: COL_INICIO_Y = col_map["inicio_y"]
+        if col_map["fin_x"]:    COL_FIN_X    = col_map["fin_x"]
+        if col_map["fin_y"]:    COL_FIN_Y    = col_map["fin_y"]
+
+        #print(f"✅ Usando columnas: {COL_INICIO_X}, {COL_INICIO_Y}, {COL_FIN_X}, {COL_FIN_Y}")
+
         pintar_pista_interactiva(df_rec, output_dir=out_dir)
 
     print("\n✅ Análisis completo.")
