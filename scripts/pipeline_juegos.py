@@ -14,190 +14,210 @@ LARGO_PISTA = 200
 COL_JUGADOR  = "jugador"
 COL_WINNER   = "winner"
 COL_ERROR    = "error"
-COL_INICIO_X = "inicio_gople:_x"
-COL_INICIO_Y = "inicio_gople:_y"
+COL_INICIO_X = "inicio_golpe:_x"  # corregido
+COL_INICIO_Y = "inicio_golpe:_y"  # corregido
 COL_FIN_X    = "fin_golpe:_x"
 COL_FIN_Y    = "fin_golpe:_y"
 
 COLORES_EVENTO = {
-    "winner": "#00BFFF",           # Azul brillante
-    "error no forzado": "#FF9800", # Naranja
-    "missed": "#FF3B3B",           # Rojo
-    "bola dentro": "#4CAF50"       # Verde
+    "winner": "#00BFFF",
+    "error no forzado": "#FF9800",
+    "missed": "#FF3B3B",
+    "bola dentro": "#4CAF50"
 }
 
-
 # ======================================================
-# FUNCIONES AUXILIARES
+# UTILIDADES
 # ======================================================
-
-def safe_int(val):
-    try:
-        if pd.isna(val):
-            return 0
-        return int(val)
-    except Exception:
-        return 0
-
 
 def cargar_datos(ruta=None):
     if ruta is None or ruta.strip() == "":
         ruta = os.path.join(os.path.dirname(__file__), "..", "data", "interim", "final_clean.parquet")
-        ruta = os.path.abspath(ruta)
+    ruta = os.path.abspath(ruta)
     print(f"📂 Cargando datos desde: {ruta}")
-    df = pd.read_parquet(ruta)
+
+    ext = os.path.splitext(ruta)[1].lower()
+    if ext == ".parquet":
+        df = pd.read_parquet(ruta)
+    elif ext in [".xlsx", ".xls"]:
+        df = pd.read_excel(ruta)
+    else:
+        raise ValueError(f"❌ Formato de archivo no soportado: {ext}")
+
     print(f"✅ Datos cargados: {len(df):,} filas.")
     return df
 
-
 # ======================================================
-# RECORTE Y MARCADOR
+# PROCESAMIENTO DE MARCADOR ROBUSTO
 # ======================================================
 
-def recortar_por_marcador(df, limite_juegos):
+def procesar_marcador_robusto(df_clean):
+    df = df_clean.copy()
+    cols = ["clip_start", "juego_p1", "juego_p2", "set_p1", "set_p2"]
+    df = df[[c for c in cols if c in df.columns]].copy()
     df = df.sort_values("clip_start").reset_index(drop=True)
-    df["juego_p1_int"] = pd.to_numeric(df["juego_p1"], errors="coerce").fillna(0).astype(int)
-    df["juego_p2_int"] = pd.to_numeric(df["juego_p2"], errors="coerce").fillna(0).astype(int)
 
-    j1 = df["juego_p1_int"]
-    j2 = df["juego_p2_int"]
+    # === 1️⃣ numéricos ===
+    for c in ["juego_p1", "juego_p2", "set_p1", "set_p2"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    j1_prev = j1.shift(1).fillna(0).astype(int)
-    j2_prev = j2.shift(1).fillna(0).astype(int)
-    
-    # 1. Detección de Reseteo (Inicio de Nuevo Set)
-    condicion_inicio_nuevo_set = (j1 <= 1) & (j2 <= 1)
-    
-    # 2. Condición de Fin de Set (en la fila ANTERIOR)
-    condicion_set_terminado_prev = (
-        ((j1_prev >= 6) | (j2_prev >= 6)) & 
-        (abs(j1_prev - j2_prev) >= 2)
-    )
-    
-    # 3. Inferir Fin de Set
-    # Caso 1: Fin de set explícito en la fila anterior (ej. 6-3)
-    df["juegos_finalizados_inferidos"] = 0
-    df.loc[condicion_inicio_nuevo_set & condicion_set_terminado_prev, "juegos_finalizados_inferidos"] = j1_prev + j2_prev
+    df["set_inferido_auto"] = False
 
-    # Caso 2 (Tu lógica): Fin de set *inferido* (ej. 5-3, pero luego viene 0-0)
-    # Buscamos reseteo Y que el marcador anterior NO cumpliera el fin de set
-    condicion_set_no_terminado_prev = ~condicion_set_terminado_prev
+    # === 2️⃣ propagar juegos ===
+    df["juego_p1"] = df["juego_p1"].ffill().fillna(0).astype(int)
+    df["juego_p2"] = df["juego_p2"].ffill().fillna(0).astype(int)
 
-    condicion_inferencia_necesaria = condicion_inicio_nuevo_set & condicion_set_no_terminado_prev
-    
-    # Inferimos el marcador final y los juegos. 
-    # El ganador es el que llevaba más juegos. El marcador final será el del ganador + 1.
-    def inferir_juegos(row):
-        # Si p1 > p2, el marcador final es (p1+1) + p2, o 6 + p2 si p1 < 5.
-        p1, p2 = row["juego_p1_int_prev"], row["juego_p2_int_prev"]
-        
-        # Debe haber un ganador claro, o al menos un juego avanzado.
-        if p1 + p2 == 0:
-            return 0 # No hay juegos jugados
-            
-        if p1 > p2:
-            final_p1 = max(6, p1 + 1) # Asumimos al menos 6
-            final_p2 = p2
-        elif p2 > p1:
-            final_p1 = p1
-            final_p2 = max(6, p2 + 1)
-        else: # Empate (ej. 5-5). Imposible de inferir el 7-5 o 7-6/6-7 sin más datos. Lo dejamos en 0.
-            return 0
-            
-        # Nos aseguramos de la diferencia mínima de 2 juegos para terminar el set, o 7-5, 7-6, etc.
-        if abs(final_p1 - final_p2) >= 2 or (final_p1 == 7 and final_p2 in [5, 6]) or (final_p2 == 7 and final_p1 in [5, 6]):
-            return final_p1 + final_p2
-        return 0 # No se puede inferir con seguridad
-    
-    # Creamos un DF temporal para aplicar la función con shift
-    df_temp = pd.DataFrame({'juego_p1_int_prev': j1_prev, 'juego_p2_int_prev': j2_prev})
-    juegos_inferidos = df_temp.apply(inferir_juegos, axis=1)
+    # === 3️⃣ corregir sets SOLO si uno está NaN y el otro no ===
+    for i in range(1, len(df)):
+        s1_prev, s2_prev = df.loc[i - 1, ["set_p1", "set_p2"]]
+        s1, s2 = df.loc[i, ["set_p1", "set_p2"]]
 
-    # Solo aplicamos la inferencia donde es necesaria (Caso 2)
-    df.loc[condicion_inferencia_necesaria, "juegos_finalizados_inferidos"] = juegos_inferidos
-    
-    # 4. Acumulación y Total (Igual que antes)
-    df["juegos_acumulados_sets"] = df["juegos_finalizados_inferidos"].cumsum()
-    df["juegos_totales_acumulados"] = df["juegos_acumulados_sets"] + j1 + j2
+        if pd.isna(s1) and pd.isna(s2):
+            df.loc[i, ["set_p1", "set_p2"]] = [s1_prev, s2_prev]
+            continue
 
-    # 5. Recorte (Vectorizado)
-    condicion_limite = df["juegos_totales_acumulados"] >= limite_juegos
-
-    if condicion_limite.any():
-        idx_fin = condicion_limite.idxmax()
-    else:
-        idx_fin = len(df) - 1
-
-    return df.loc[:idx_fin].reset_index(drop=True)
-
-
-def calcular_marcador_y_sets(df):
-    set_p1 = 0
-    set_p2 = 0
-    sets_resultados = []
-
-    # Se asume que el DataFrame recortado contiene las columnas auxiliares de la función V4 anterior:
-    # 'juego_p1_int', 'juego_p2_int', 'juego_p1_int_prev', 'juego_p2_int_prev', 'juegos_finalizados_inferidos'
-
-    # 1. Identificar las filas que marcan el final de un set (donde el contador de juegos fue sumado)
-    sets_terminados_df = df[df["juegos_finalizados_inferidos"] > 0]
-
-    # Iterar sobre las filas de reseteo para reconstruir el marcador del set
-    for _, row in sets_terminados_df.iterrows():
-        # Valores de la fila ANTERIOR (donde terminó el set)
-        j1_prev = row["juego_p1_int_prev"]
-        j2_prev = row["juego_p2_int_prev"]
-        
-        # Juegos totales que se sumaron al acumulado (incluye el juego inferido)
-        juegos_sumados = row["juegos_finalizados_inferidos"]
-
-        # Determinar el marcador final del set (P1-P2)
-        # Si el set fue contado de forma explícita (ej. 6-3)
-        if (j1_prev + j2_prev) == juegos_sumados:
-            final_p1, final_p2 = j1_prev, j2_prev
-            
-        # Si el set fue INFERIDO (el marcador anterior era 5-3, pero se sumó 9 juegos totales)
-        else:
-            # P1 es el ganador inferido
-            if j1_prev > j2_prev:
-                # El marcador de P1 es: juegos_sumados - juegos_P2_rival. (Ej: 9 - 3 = 6)
-                final_p1 = juegos_sumados - j2_prev
-                final_p2 = j2_prev
-            # P2 es el ganador inferido
-            elif j2_prev > j1_prev:
-                # El marcador de P2 es: juegos_sumados - juegos_P1_rival.
-                final_p1 = j1_prev
-                final_p2 = juegos_sumados - j1_prev
+        if pd.isna(s1) and pd.notna(s2):
+            if s2 in (0, 1):
+                df.loc[i, "set_p1"] = 1 - int(s2)
+                df.loc[i, "set_inferido_auto"] = True
             else:
-                # En caso de empate (ej. 5-5) donde se asumió 0 juegos inferidos por seguridad, 
-                # esto no debería activarse, pero si lo hace, no contamos el set.
-                final_p1, final_p2 = 0, 0
-        
-        # 2. Conteo y Registro del Set
-        if final_p1 > final_p2:
-            set_p1 += 1
-            sets_resultados.append((final_p1, final_p2))
-        elif final_p2 > final_p1:
-            set_p2 += 1
-            sets_resultados.append((final_p1, final_p2))
+                df.loc[i, "set_p1"] = s1_prev
+        elif pd.isna(s2) and pd.notna(s1):
+            if s1 in (0, 1):
+                df.loc[i, "set_p2"] = 1 - int(s1)
+                df.loc[i, "set_inferido_auto"] = True
+            else:
+                df.loc[i, "set_p2"] = s2_prev
 
+    df[["set_p1", "set_p2"]] = df[["set_p1", "set_p2"]].ffill().fillna(0).astype(int)
 
-    # 3. Marcador de Juegos Actual: siempre es el de la última fila del DF recortado
-    ult = df.iloc[-1]
-    
-    marcador = {
-        "set_p1": set_p1,
-        "set_p2": set_p2,
-        "juego_p1": ult["juego_p1_int"],
-        "juego_p2": ult["juego_p2_int"],
-    }
-    
-    return marcador, sets_resultados
+    # === 4️⃣ detectar cambios de set ===
+    df["juego_p1_prev"] = df["juego_p1"].shift(1).fillna(0)
+    df["juego_p2_prev"] = df["juego_p2"].shift(1).fillna(0)
+    df["set_p1_prev"] = df["set_p1"].shift(1).fillna(0)
+    df["set_p2_prev"] = df["set_p2"].shift(1).fillna(0)
 
+    cond_set_exp = (df["set_p1"] != df["set_p1_prev"]) | (df["set_p2"] != df["set_p2_prev"])
+    cond_set_imp = ((df["juego_p1"] == 0) & (df["juego_p2"] == 0)) & (
+        (df["juego_p1_prev"] > 0) | (df["juego_p2_prev"] > 0)
+    )
+    df["cambio_set"] = cond_set_exp | cond_set_imp
+
+    # === 5️⃣ inferir marcador del set cerrado ===
+    def inferir_y_validar(row):
+        p1, p2 = int(row["juego_p1_prev"]), int(row["juego_p2_prev"])
+        if p1 == p2 == 0:
+            return None
+        if p1 > p2:
+            f1, f2 = max(6, p1 + 1), p2
+        elif p2 > p1:
+            f1, f2 = p1, max(6, p2 + 1)
+        else:
+            return None
+        if (
+            (f1 >= 6 or f2 >= 6)
+            and (
+                abs(f1 - f2) >= 2
+                or (f1 == 7 and f2 in (5, 6))
+                or (f2 == 7 and f1 in (5, 6))
+            )
+        ):
+            return (f1, f2)
+        return None
+
+    df["set_inferido"] = df.apply(lambda r: inferir_y_validar(r) if r["cambio_set"] else None, axis=1)
+    df["juegos_finalizados_inferidos"] = df["set_inferido"].apply(lambda x: sum(x) if isinstance(x, tuple) else 0)
+
+    # === 6️⃣ acumulados ===
+    df["juegos_acumulados_sets"] = df["juegos_finalizados_inferidos"].cumsum()
+    df["progreso_set_actual"] = df["juego_p1"] + df["juego_p2"]
+    df.loc[df["cambio_set"], "progreso_set_actual"] = 0
+
+    # === 7️⃣ contador de juegos ===
+    df["juegos_totales_acumulados"] = 0
+    contador = 0
+    for i in range(len(df)):
+        if i > 0:
+            j_prev = f"{df.loc[i-1, 'juego_p1']}-{df.loc[i-1, 'juego_p2']}"
+            j_cur = f"{df.loc[i, 'juego_p1']}-{df.loc[i, 'juego_p2']}"
+            s_prev = f"{df.loc[i-1, 'set_p1']}-{df.loc[i-1, 'set_p2']}"
+            s_cur = f"{df.loc[i, 'set_p1']}-{df.loc[i, 'set_p2']}"
+            if (j_cur != j_prev) and not (j_cur == "0-0" and s_cur != s_prev):
+                contador += 1
+        df.loc[i, "juegos_totales_acumulados"] = contador
+
+    # === 8️⃣ resumen de sets (robusto y sin duplicar) ===
+    resumen_sets = []
+    set_counter = 0
+    run_s1, run_s2 = 0, 0
+    last_set_recorded_idx = -1
+    last_clip = None
+
+    for i, r in df.iterrows():
+        if bool(r["cambio_set"]) and isinstance(r["set_inferido"], tuple):
+            p1g, p2g = r["set_inferido"]
+            ganador = "P1" if p1g > p2g else "P2"
+
+            # Evitar duplicados (clip_start repetido o mismo marcador)
+            if (
+                (last_clip is None or r["clip_start"] != last_clip)
+                and (not resumen_sets or f"{p1g}-{p2g}" != resumen_sets[-1]["Marcador_Set"])
+            ):
+                set_counter += 1
+                if ganador == "P1":
+                    run_s1 += 1
+                else:
+                    run_s2 += 1
+                resumen_sets.append({
+                    "Set": set_counter,
+                    "clip_start": r["clip_start"],
+                    "Marcador_Set": f"{p1g}-{p2g}",
+                    "Ganador": ganador,
+                    "Marcador_Sets_Total": f"{run_s1}-{run_s2}"
+                })
+                last_set_recorded_idx = i
+                last_clip = r["clip_start"]
+
+    # === 9️⃣ inferir último set si no hubo cambio_set final ===
+    ultima_fila = df.iloc[-1]
+    if not df["cambio_set"].iloc[-1]:
+        j1, j2 = int(ultima_fila["juego_p1"]), int(ultima_fila["juego_p2"])
+        if j1 != j2:
+            ganador = "P1" if j1 > j2 else "P2"
+            set_counter += 1
+            if ganador == "P1":
+                run_s1 += 1
+            else:
+                run_s2 += 1
+            marcador_final_set = f"{j1+1}-{j2}" if ganador == "P1" else f"{j1}-{j2+1}"
+            resumen_sets.append({
+                "Set": set_counter,
+                "clip_start": ultima_fila["clip_start"],
+                "Marcador_Set": marcador_final_set,
+                "Ganador": ganador,
+                "Marcador_Sets_Total": f"{run_s1}-{run_s2}"
+            })
+
+    df_resumen = pd.DataFrame(resumen_sets)
+    return df, df_resumen
 
 # ======================================================
-# CLASIFICAR EVENTOS
+# RESTO DE FUNCIONES (sin cambios de lógica)
 # ======================================================
+
+def recortar_por_limite(df, limite_juegos, resumen_sets):
+    mask = df["juegos_totales_acumulados"] >= limite_juegos
+    if mask.any():
+        idx = mask.idxmax()
+        fila = df.loc[idx]
+        resumen_prev = resumen_sets.loc[resumen_sets["clip_start"] <= fila["clip_start"]]
+        marcadores_cerrados = resumen_prev["Marcador_Set"].tolist() if not resumen_prev.empty else []
+        marcador_completo = " ".join(marcadores_cerrados + [f"{int(fila['juego_p1'])}-{int(fila['juego_p2'])}"])
+    else:
+        fila = df.iloc[-1]
+        marcadores_cerrados = resumen_sets["Marcador_Set"].tolist() if not resumen_sets.empty else []
+        marcador_completo = " ".join(marcadores_cerrados)
+    return fila, marcador_completo
 
 def clasificar_eventos(df):
     d = df.copy()
@@ -205,180 +225,74 @@ def clasificar_eventos(df):
         if c not in d.columns:
             d[c] = ""
         d[c] = d[c].astype(str).str.lower().str.strip()
-
     d["categoria"] = "bola dentro"
     d.loc[d[COL_ERROR].str.contains("error no forzado", na=False), "categoria"] = "error no forzado"
     d.loc[d[COL_ERROR].str.contains("missed", na=False), "categoria"] = "missed"
     d.loc[d[COL_WINNER].str.contains("winner", na=False), "categoria"] = "winner"
     return d
 
-
-# ======================================================
-# MÉTRICAS
-# ======================================================
-
 def resumen_metricas_por_jugador(df):
     conteos = df.groupby(["jugador", "categoria"]).size().unstack(fill_value=0)
     conteos["total"] = conteos.sum(axis=1)
     porcentajes = conteos.div(conteos["total"], axis=0).mul(100).round(1)
-    resumen = pd.concat([conteos, porcentajes.add_suffix("_%")], axis=1).reset_index()
-    return resumen
-
-
-# ======================================================
-# TOP 5 GOLPES (GRÁFICAS ESTÁTICAS)
-# ======================================================
+    return pd.concat([conteos, porcentajes.add_suffix("_%")], axis=1).reset_index()
 
 def top_golpes_por_jugador(df, output_dir, top_n=5):
-    d = df.copy()
-    d = d[d["golpe_q"].notna()]
-    conteo = d.groupby(["jugador", "golpe_q"]).size().reset_index(name="conteo")
+    if "golpe_q" not in df.columns:
+        print("⚠️ No hay columna 'golpe_q' para top golpes.")
+        return
+    conteo = df.groupby(["jugador", "golpe_q"]).size().reset_index(name="conteo")
     top = conteo.sort_values(["jugador", "conteo"], ascending=[True, False]).groupby("jugador").head(top_n)
-
     os.makedirs(output_dir, exist_ok=True)
-
     for jug, g in top.groupby("jugador"):
         plt.figure(figsize=(6, 4))
         plt.barh(g["golpe_q"], g["conteo"], color="#2196F3")
         plt.title(f"Top {top_n} golpes — {jug}")
         plt.xlabel("Repeticiones")
         plt.tight_layout()
-        path = os.path.join(output_dir, f"top_golpes_{jug}.png")
-        plt.savefig(path, dpi=300)
+        plt.savefig(os.path.join(output_dir, f"top_golpes_{jug}.png"), dpi=300)
         plt.close()
-        print(f"📊 Guardado: {path}")
 
+def pintar_pista_interactiva(df, output_dir="outputs/html_pistas"):
+    os.makedirs(output_dir, exist_ok=True)
+    for jugador in df[COL_JUGADOR].dropna().unique():
+        sub = df[df[COL_JUGADOR] == jugador].dropna(subset=[COL_INICIO_X, COL_INICIO_Y, COL_FIN_X, COL_FIN_Y])
+        if sub.empty:
+            continue
+        fig = go.Figure()
+        fig.add_shape(type="rect", x0=0, y0=0, x1=ANCHO_PISTA, y1=LARGO_PISTA, line=dict(color="white", width=2))
+        fig.add_shape(type="line", x0=0, y0=100, x1=ANCHO_PISTA, y1=100, line=dict(color="white", width=3))
+        for cat, color in COLORES_EVENTO.items():
+            df_cat = sub[sub["categoria"] == cat]
+            for _, r in df_cat.iterrows():
+                fig.add_trace(go.Scatter(
+                    x=[r[COL_INICIO_X], r[COL_FIN_X]],
+                    y=[r[COL_INICIO_Y], r[COL_FIN_Y]],
+                    mode="lines+markers",
+                    line=dict(color=color, width=2),
+                    marker=dict(size=5),
+                    name=cat
+                ))
+        fig.update_layout(
+            title=f"Pista — {jugador}",
+            plot_bgcolor="#003C77",
+            paper_bgcolor="#00244D",
+            xaxis=dict(visible=False, range=[0, ANCHO_PISTA]),
+            yaxis=dict(visible=False, range=[0, LARGO_PISTA], scaleanchor="x", scaleratio=1),
+            font=dict(color="white")
+        )
+        fig.write_html(os.path.join(output_dir, f"pista_{jugador}.html"))
 
 # ======================================================
 # DIRECTORIO DE SALIDA
 # ======================================================
 
-def build_output_dir(base_dir, n_juegos, marcador, set_results, df):
+def build_output_dir(base_dir, nombre_partido, marcador_texto):
     os.makedirs(base_dir, exist_ok=True)
-    dataset_name = "desconocido"
-    if not df.empty:
-        val = str(df.iloc[0, -1]).strip()
-        if val and val.lower() not in ("nan", "none", "<na>"):
-            dataset_name = os.path.splitext(val)[0]
-
-    sets_text = ",".join([f"{a}-{b}" for a, b in set_results]) if set_results else ""
-    j1 = safe_int(marcador.get("juego_p1", 0))
-    j2 = safe_int(marcador.get("juego_p2", 0))
-    if j1 > 0 or j2 > 0:
-        sets_text = f"{sets_text},{j1}-{j2}" if sets_text else f"{j1}-{j2}"
-    folder_name = sets_text if sets_text else f"sin_sets__{n_juegos}_juegos"
-    path = os.path.join(base_dir, dataset_name, folder_name)
+    marcador_texto = str(marcador_texto).replace(" ", "_")
+    path = os.path.join(base_dir, nombre_partido, marcador_texto)
     os.makedirs(path, exist_ok=True)
     return path
-
-
-# ======================================================
-# VISUALIZACIÓN INTERACTIVA PLOTLY
-# ======================================================
-
-def pintar_pista_interactiva(df, output_dir="outputs/html_pistas"):
-    os.makedirs(output_dir, exist_ok=True)
-    jugadores = df[COL_JUGADOR].dropna().unique()
-
-    for jugador in jugadores:
-        sub = df[df[COL_JUGADOR] == jugador].dropna(
-            subset=[COL_INICIO_X, COL_INICIO_Y, COL_FIN_X, COL_FIN_Y]
-        )
-        if sub.empty:
-            print(f"⚠️ No hay datos válidos para {jugador}.")
-            continue
-
-        fig = go.Figure()
-
-        # --- Dibujo base de la pista ---
-        fig.add_shape(type="rect", x0=0, y0=0, x1=ANCHO_PISTA, y1=LARGO_PISTA,
-                      line=dict(color="white", width=2))
-        fig.add_shape(type="line", x0=0, y0=100, x1=ANCHO_PISTA, y1=100,
-                      line=dict(color="white", width=3))
-        fig.add_shape(type="line", x0=0, y0=65, x1=ANCHO_PISTA, y1=65,
-                      line=dict(color="white", width=1))
-        fig.add_shape(type="line", x0=0, y0=135, x1=ANCHO_PISTA, y1=135,
-                      line=dict(color="white", width=1))
-        fig.add_shape(type="line", x0=50, y0=65, x1=50, y1=135,
-                      line=dict(color="white", width=1))
-
-        # --- Dibujar trayectorias con inicio y fin ---
-        for cat, color in COLORES_EVENTO.items():
-            df_cat = sub[sub["categoria"] == cat]
-            if df_cat.empty:
-                continue
-
-            for _, r in df_cat.iterrows():
-                x0, y0, x1, y1 = r[COL_INICIO_X], r[COL_INICIO_Y], r[COL_FIN_X], r[COL_FIN_Y]
-                distancia = ((x1 - x0)**2 + (y1 - y0)**2)**0.5
-
-                # Línea del golpe
-                fig.add_trace(go.Scatter(
-                    x=[x0, x1],
-                    y=[y0, y1],
-                    mode="lines",
-                    line=dict(color=color, width=2),
-                    name=cat,
-                    legendgroup=cat,
-                    hoverinfo="text",
-                    hovertext=f"{cat.title()}<br>"
-                              f"Inicio: ({x0:.1f},{y0:.1f})<br>"
-                              f"Fin: ({x1:.1f},{y1:.1f})<br>"
-                              f"Distancia: {distancia:.1f} unidades",
-                    showlegend=False
-                ))
-
-                # Punto de inicio
-                fig.add_trace(go.Scatter(
-                    x=[x0], y=[y0],
-                    mode="markers",
-                    marker=dict(size=6, color=color, symbol="circle"),
-                    name=f"{cat} - inicio",
-                    legendgroup=cat,
-                    hovertext=f"Inicio ({x0:.1f},{y0:.1f})",
-                    showlegend=False
-                ))
-
-                # Punto de fin con flecha/triángulo
-                fig.add_trace(go.Scatter(
-                    x=[x1], y=[y1],
-                    mode="markers",
-                    marker=dict(size=8, color=color, symbol="triangle-up"),
-                    name=f"{cat} - fin",
-                    legendgroup=cat,
-                    hovertext=f"Fin ({x1:.1f},{y1:.1f})",
-                    showlegend=False
-                ))
-
-        # --- Controles interactivos ---
-        botones = [dict(
-            label="Todos", method="update",
-            args=[{"visible": [True] * len(fig.data)},
-                  {"title": f"Pista — {jugador} (Todos los golpes)"}]
-        )]
-        cats = list(COLORES_EVENTO.keys())
-        for cat in cats:
-            visibles = [(cat in d.name) for d in fig.data]
-            botones.append(dict(
-                label=cat.title(), method="update",
-                args=[{"visible": visibles},
-                      {"title": f"Pista — {jugador} ({cat.title()})"}]
-            ))
-
-        fig.update_layout(
-            title=f"Pista interactiva — {jugador}",
-            plot_bgcolor="#003C77",
-            paper_bgcolor="#00244D",
-            xaxis=dict(visible=False, range=[0, ANCHO_PISTA]),
-            yaxis=dict(visible=False, range=[0, LARGO_PISTA], scaleanchor="x", scaleratio=1),
-            updatemenus=[dict(buttons=botones, direction="down", showactive=True, x=1.15, xanchor="left", y=1.1)],
-            font=dict(color="white")
-        )
-
-        out_path = os.path.join(output_dir, f"pista_{jugador}.html")
-        fig.write_html(out_path)
-        print(f"💾 Guardada versión interactiva con coordenadas: {out_path}")
-
 
 
 # ======================================================
@@ -386,37 +300,63 @@ def pintar_pista_interactiva(df, output_dir="outputs/html_pistas"):
 # ======================================================
 
 def analizar_partido_interactivo():
-    ruta = input("📂 Ruta del archivo parquet (Enter para usar la predeterminada): ").strip()
+    # === 1️⃣ Cargar datos ===
+    ruta = input("📂 Ruta del archivo (Excel o Parquet): ").strip()
     df0 = cargar_datos(ruta)
     n_juegos = int(input("🎮 ¿Cuántos juegos quieres analizar?: ").strip())
 
-    df_rec = recortar_por_marcador(df0, n_juegos)
-    marcador, sets = calcular_marcador_y_sets(df_rec)
-    print(f"🎯 Marcador parcial — Juegos: {marcador['juego_p1']}-{marcador['juego_p2']} | Sets: {marcador['set_p1']}-{marcador['set_p2']}")
+    # === 2️⃣ Detectar nombre del partido ===
+    ultima_col = df0.columns[-1]
+    valor_col = str(df0[ultima_col].iloc[0]).strip()
+    if valor_col and valor_col.lower() not in ("nan", "", "none"):
+        nombre_partido = valor_col
+    else:
+        nombre_partido = os.path.splitext(os.path.basename(ruta))[0]
+    print(f"🏷️ Nombre del partido detectado: {nombre_partido}")
 
+    # === 3️⃣ Procesar marcador robusto sobre el DataFrame completo ===
+    df_proc, df_resumen = procesar_marcador_robusto(df0)
+
+    # === 4️⃣ Determinar fila de corte y marcador actual ===
+    fila, marcador_completo = recortar_por_limite(df_proc, n_juegos, df_resumen)
+    print(f"Este es el marcador completo hasta el corte: {marcador_completo}")
+    #print(f"🎯 Marcador parcial — Juegos: {fila['juego_p1']}-{fila['juego_p2']} | Sets: {fila['set_p1']}-{fila['set_p2']}")
+
+    # === 5️⃣ Cortar el DataFrame original hasta esa fila ===
+    if "clip_start" in df0.columns:
+        # Buscar el índice más cercano del clip_start coincidente o menor
+        idx_corte = df0[df0["clip_start"] <= fila["clip_start"]].index.max()
+        df_cortado = df0.loc[:idx_corte].copy()
+    else:
+        df_cortado = df0.copy()  # Fallback
+    print(f"✂️  DataFrame recortado hasta fila {idx_corte} ({len(df_cortado)} filas).")
+
+    # === 6️⃣ Crear carpeta de salida ===
     base = os.path.join("outputs", "figures")
-    out_dir = build_output_dir(base, n_juegos, marcador, sets, df0)
-    fig_dir = out_dir
+    out_dir = build_output_dir(base, nombre_partido, marcador_completo)
     print(f"📁 Resultados guardados en: {os.path.abspath(out_dir)}")
 
-    print("\n📊 Calculando métricas resumen...")
-    df_rec = clasificar_eventos(df_rec)
-    resumen = resumen_metricas_por_jugador(df_rec)
-    resumen.to_csv(os.path.join(out_dir, "resumen_metricas.csv"), index=False)
-    print(f"✅ Resumen guardado en {out_dir}")
+    # === 7️⃣ Clasificación y métricas usando solo el DF recortado ===
+    df_rec = clasificar_eventos(df_cortado)
 
-    print("\n📈 Generando top golpes...")
-    top_golpes_por_jugador(df_rec, output_dir=out_dir)
+    # Validar que tenga columna 'jugador'
+    if "jugador" not in df_rec.columns:
+        print("⚠️ Advertencia: No se encontró la columna 'jugador' en los datos. Saltando métricas por jugador.")
+    else:
+        resumen = resumen_metricas_por_jugador(df_rec)
+        resumen.to_csv(os.path.join(out_dir, "resumen_metricas.csv"), index=False)
+        print(f"✅ Resumen guardado en {out_dir}")
 
-    print("\n🎾 Generando pistas interactivas...")
-    pintar_pista_interactiva(df_rec, output_dir=fig_dir)
+        # === 8️⃣ Visualizaciones ===
+        top_golpes_por_jugador(df_rec, output_dir=out_dir)
+        pintar_pista_interactiva(df_rec, output_dir=out_dir)
 
     print("\n✅ Análisis completo.")
-    return df_rec, resumen, marcador, out_dir
+    return df_cortado, marcador_completo, out_dir
 
 
 # ======================================================
-# MAIN
+# EJECUCIÓN
 # ======================================================
 
 if __name__ == "__main__":
