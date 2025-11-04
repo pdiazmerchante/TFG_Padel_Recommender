@@ -225,6 +225,9 @@ def clasificar_eventos(df):
         if c not in d.columns:
             d[c] = ""
         d[c] = d[c].astype(str).str.lower().str.strip()
+
+    # --- AÑADE ESTO PARA DEPURACIÓN ---
+    # ----------------------------------
     d["categoria"] = "bola dentro"
     d.loc[d[COL_ERROR].str.contains("error no forzado", na=False), "categoria"] = "error no forzado"
     d.loc[d[COL_ERROR].str.contains("missed", na=False), "categoria"] = "missed"
@@ -289,6 +292,9 @@ def detectar_columnas_coordenadas(df):
 def pintar_pista_interactiva(df, output_dir="outputs/html_pistas"):
     import os
     import plotly.graph_objects as go
+    # Importamos las constantes globales necesarias (asumo que están definidas fuera de la función)
+    # COL_JUGADOR, COL_INICIO_X, COL_INICIO_Y, COL_FIN_X, COL_FIN_Y, 
+    # ANCHO_PISTA, LARGO_PISTA, COLORES_EVENTO, etc.
 
     # Asegurarse de que la carpeta exista
     os.makedirs(output_dir, exist_ok=True)
@@ -298,7 +304,11 @@ def pintar_pista_interactiva(df, output_dir="outputs/html_pistas"):
     print(f"👥 Jugadores detectados: {jugadores}")
 
     for jugador in jugadores:
-        sub = df[df[COL_JUGADOR] == jugador].dropna(subset=[COL_INICIO_X, COL_INICIO_Y, COL_FIN_X, COL_FIN_Y])
+        # Usamos las constantes de columna que definiste en tu código original
+        sub = df[df[COL_JUGADOR] == jugador].dropna(
+            subset=[COL_INICIO_X, COL_INICIO_Y, COL_FIN_X, COL_FIN_Y]
+        ).reset_index(drop=True)
+        
         if sub.empty:
             print(f"⚠️ Sin coordenadas válidas para {jugador}, no se genera pista.")
             continue
@@ -306,47 +316,92 @@ def pintar_pista_interactiva(df, output_dir="outputs/html_pistas"):
         # Crear figura
         fig = go.Figure()
 
-        # Dibujar la pista
-        fig.add_shape(
-            type="rect",
-            x0=0, y0=0, x1=ANCHO_PISTA, y1=LARGO_PISTA,
-            line=dict(color="white", width=2)
-        )
-        fig.add_shape(
-            type="line",
-            x0=0, y0=LARGO_PISTA/2, x1=ANCHO_PISTA, y1=LARGO_PISTA/2,
-            line=dict(color="white", width=3)
-        )
+        # --- DIBUJO DE LA PISTA DE PÁDEL (Líneas 33-40 de tu original, más detalle) ---
+        SERVICIO_Y_OFFSET = 60 
+        CENTRO_X = ANCHO_PISTA / 2
+        
+        fig.add_shape(type="rect", x0=0, y0=0, x1=ANCHO_PISTA, y1=LARGO_PISTA, line=dict(color="white", width=3)) 
+        fig.add_shape(type="line", x0=0, y0=LARGO_PISTA/2, x1=ANCHO_PISTA, y1=LARGO_PISTA/2, line=dict(color="white", width=4)) 
+        fig.add_shape(type="line", x0=0, y0=LARGO_PISTA/2 - SERVICIO_Y_OFFSET, x1=ANCHO_PISTA, y1=LARGO_PISTA/2 - SERVICIO_Y_OFFSET, line=dict(color="white", width=2))
+        fig.add_shape(type="line", x0=0, y0=LARGO_PISTA/2 + SERVICIO_Y_OFFSET, x1=ANCHO_PISTA, y1=LARGO_PISTA/2 + SERVICIO_Y_OFFSET, line=dict(color="white", width=2))
+        fig.add_shape(type="line", x0=CENTRO_X, y0=LARGO_PISTA/2, x1=CENTRO_X, y1=LARGO_PISTA/2 - SERVICIO_Y_OFFSET, line=dict(color="white", width=2))
+        fig.add_shape(type="line", x0=CENTRO_X, y0=LARGO_PISTA/2, x1=CENTRO_X, y1=LARGO_PISTA/2 + SERVICIO_Y_OFFSET, line=dict(color="white", width=2))
 
-        # Dibujar trayectorias por categoría
+        # --- DIBUJO DE TRAYECTORIAS CON DOBLE TRAZA (Marcador de inicio y fin diferente) ---
+        traces_to_add = []
+        
         for cat, color in COLORES_EVENTO.items():
             df_cat = sub[sub["categoria"] == cat]
-            if df_cat.empty:
-                continue
-            for _, r in df_cat.iterrows():
-                fig.add_trace(go.Scatter(
-                    x=[r[COL_INICIO_X], r[COL_FIN_X]],
-                    y=[r[COL_INICIO_Y], r[COL_FIN_Y]],
+            if df_cat.empty: continue
+            
+            is_first_trace = True
+            
+            for i, r in df_cat.iterrows():
+                
+                # 1. Traza de la LÍNEA + MARCADOR DE INICIO (Círculo)
+                traces_to_add.append(go.Scatter(
+                    x=[r[COL_INICIO_X], r[COL_FIN_X]], # La línea va de inicio a fin
+                    y=[r[COL_INICIO_Y], r[COL_FIN_Y]], 
                     mode="lines+markers",
                     line=dict(color=color, width=2),
-                    marker=dict(size=5),
+                    
+                    # --- MARCADOR DE INICIO: Círculo ---
+                    marker=dict(size=5, symbol='circle'), 
+                    
+                    showlegend=is_first_trace, 
                     name=cat,
-                    hovertext=f"{cat} ({jugador})"
+                    hovertext=f"Golpe ({cat})",
+                    hoverinfo="text",
+                    legendgroup=cat, # Mismo grupo
+                    
+                    # Ocultación a prueba de fallos
+                    unselected=dict(marker=dict(opacity=0)) 
                 ))
 
-        # Configuración visual
+                # 2. Traza de solo el MARCADOR FINAL (Triángulo/Flecha)
+                traces_to_add.append(go.Scatter(
+                    x=[r[COL_FIN_X]], # Solo el punto final
+                    y=[r[COL_FIN_Y]],
+                    mode="markers", # SOLO marcadores
+                    
+                    # --- MARCADOR DE FIN: Triángulo/Flecha ---
+                    marker=dict(size=8, symbol='triangle-right', color=color),
+                    
+                    showlegend=False, # Nunca muestra esta traza en la leyenda
+                    name=cat,
+                    hovertext=f"Fin ({cat})",
+                    hoverinfo="text",
+                    legendgroup=cat, # Mismo grupo
+                    
+                    # Ocultación a prueba de fallos
+                    unselected=dict(marker=dict(opacity=0))
+                ))
+                
+                is_first_trace = False
+
+        fig.add_traces(traces_to_add)
+
+        # --- CONFIGURACIÓN VISUAL, TAMAÑO Y LEYENDA (Tu original modificado) ---
         fig.update_layout(
-            title=f"Pista — {jugador}",
+            title=f"Pista Interactivo — {jugador} (Inicio/Fin Diferenciado)",
             plot_bgcolor="#003C77",
             paper_bgcolor="#00244D",
             xaxis=dict(visible=False, range=[0, ANCHO_PISTA]),
-            yaxis=dict(visible=False, range=[0, LARGO_PISTA], scaleanchor="x", scaleratio=1),
+            # Aseguramos el ratio 1:1 y el rango de Y correcto
+            yaxis=dict(visible=False, range=[0,LARGO_PISTA], scaleanchor="x", scaleratio=1), 
             font=dict(color="white"),
-            showlegend=True
+            showlegend=True,
+            
+            # --- CONFIGURACIÓN PARA OCULTACIÓN TOTAL AL CLIC ---
+            legend=dict(
+                groupclick="togglegroup", 
+                itemclick="toggle"      
+            )
+            # ----------------------------------------------------
         )
 
-        # Ruta de guardado
-        salida_html = os.path.join(output_dir, f"pista_{jugador}.html")
+        # --- RUTA DE GUARDADO (Tu original) ---
+        salida_html = os.path.join(output_dir, f"pista_{jugador}_diferenciada.html")
         fig.write_html(salida_html)
         print(f"✅ Archivo generado: {os.path.abspath(salida_html)}")
 
