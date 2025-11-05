@@ -236,10 +236,39 @@ def clasificar_eventos(df):
     return d
 
 def resumen_metricas_por_jugador(df):
+    # LÓGICA ORIGINAL: Conteos y Porcentajes por jugador
     conteos = df.groupby(["jugador", "categoria"]).size().unstack(fill_value=0)
     conteos["total"] = conteos.sum(axis=1)
-    porcentajes = conteos.div(conteos["total"], axis=0).mul(100).round(1)
-    return pd.concat([conteos, porcentajes.add_suffix("_%")], axis=1).reset_index()
+    
+    # Redondeo de Porcentajes a 2 decimales
+    porcentajes = conteos.div(conteos["total"], axis=0).mul(100).round(2)
+    
+    # DataFrame de resumen por jugador
+    resumen_jugador = pd.concat([conteos, porcentajes.add_suffix("_%")], axis=1).reset_index()
+
+    # ==========================================================
+    # NUEVA LÓGICA: Añadir filas de Suma, Media y Desviación Típica
+    # ==========================================================
+    
+    # DataFrame solo con datos numéricos de los jugadores
+    df_numerico = resumen_jugador.drop(columns=["jugador"])
+    
+    # 1. Calcular la SUMA de todas las columnas y Redondear a 2 decimales
+    suma = df_numerico.sum().round(2).to_frame().T
+    suma["jugador"] = "SUMA_JUGADORES" 
+    
+    # 2. Calcular la media (Mean) de todas las columnas y Redondear a 2 decimales
+    media = df_numerico.mean().round(2).to_frame().T
+    media["jugador"] = "MEDIA_JUGADORES" 
+    
+    # 3. Calcular la desviación típica (STD) de todas las columnas y Redondear a 2 decimales
+    std = df_numerico.std().round(2).to_frame().T
+    std["jugador"] = "STD_JUGADORES" 
+
+    # 4. Concatenar las nuevas filas: Suma, Media y STD
+    resumen_final = pd.concat([resumen_jugador, suma, media, std], ignore_index=True)
+    
+    return resumen_final
 
 def top_golpes_por_jugador(df, output_dir, top_n=5):
     if "golpe_q" not in df.columns:
@@ -451,7 +480,7 @@ def cortar_df_por_sets(df, marcador_sets: str):
     # 3️⃣ Verificamos número de juegos reales
     max_juego_df = df["juego"].max()
     if total_juegos > max_juego_df:
-        print(f"⚠️ El marcador ({total_juegos} juegos) excede los juegos reales ({max_juego_df}). Se ajustará al máximo.")
+        #print(f"⚠️ El marcador ({total_juegos} juegos) excede los juegos reales ({max_juego_df}). Se ajustará al máximo.")
         total_juegos = max_juego_df
 
     # 4️⃣ Cortamos el DF
@@ -516,7 +545,7 @@ def analizar_partido_interactivo():
         # fallback: numerar por orden si por algún motivo no existe
         df_proc["juego"] = np.arange(1, len(df_proc) + 1)
 
-    print(f"🧩 Añadida columna 'juego' para corte: {df_proc['juego'].nunique()} valores únicos")
+    #print(f"🧩 Añadida columna 'juego' para corte: {df_proc['juego'].nunique()} valores únicos")
 
 
     df_sets = cortar_df_por_sets(df_proc, marcador_total)
@@ -526,7 +555,7 @@ def analizar_partido_interactivo():
         df_set_rec = clasificar_eventos(df_set)
         resumen = resumen_metricas_por_jugador(df_set_rec)
         resumen["set"] = i
-        resumen.to_csv(os.path.join(out_dir, f"resumen_set_{i}.csv"), index=False)
+        resumen.to_excel(os.path.join(out_dir, f"resumen_set_{i}.xlsx"), index=False)
 
     resumenes = []
     for i, df_set in enumerate(df_sets, start=1):
@@ -536,7 +565,7 @@ def analizar_partido_interactivo():
         resumenes.append(r)
 
     df_resumen_todos = pd.concat(resumenes, ignore_index=True)
-    df_resumen_todos.to_csv(os.path.join(out_dir, "resumen_metricas_por_set.csv"), index=False)
+    df_resumen_todos.to_excel(os.path.join(out_dir, "resumen_metricas_por_set.xlsx"), index=False)
 
 
     # === 5️⃣ Cortar el DataFrame original hasta esa fila ===
@@ -556,7 +585,7 @@ def analizar_partido_interactivo():
         print("⚠️ Advertencia: No se encontró la columna 'jugador' en los datos. Saltando métricas por jugador.")
     else:
         resumen = resumen_metricas_por_jugador(df_rec)
-        resumen.to_csv(os.path.join(out_dir, "resumen_metricas.csv"), index=False)
+        resumen.to_excel(os.path.join(out_dir, "resumen_metricas.xlsx"), index=False)
         #print(f"✅ Resumen guardado en {out_dir}")
 
         # === 8️⃣ Visualizaciones ===
