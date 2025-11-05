@@ -53,7 +53,8 @@ def cargar_datos(ruta=None):
 
 def procesar_marcador_robusto(df_clean):
     df = df_clean.copy()
-    cols = ["clip_start", "juego_p1", "juego_p2", "set_p1", "set_p2"]
+    cols = ["clip_start", "juego_p1", "juego_p2", "set_p1", "set_p2", COL_JUGADOR, COL_WINNER, COL_ERROR, 
+        COL_INICIO_X, COL_INICIO_Y, COL_FIN_X, COL_FIN_Y]
     df = df[[c for c in cols if c in df.columns]].copy()
     df = df.sort_values("clip_start").reset_index(drop=True)
 
@@ -298,10 +299,10 @@ def pintar_pista_interactiva(df, output_dir="outputs/html_pistas"):
 
     # Asegurarse de que la carpeta exista
     os.makedirs(output_dir, exist_ok=True)
-    print(f"🎾 Guardando pistas interactivas en: {os.path.abspath(output_dir)}")
+    #print(f"🎾 Guardando pistas interactivas en: {os.path.abspath(output_dir)}")
 
     jugadores = df[COL_JUGADOR].dropna().unique().tolist()
-    print(f"👥 Jugadores detectados: {jugadores}")
+    #print(f"👥 Jugadores detectados: {jugadores}")
 
     for jugador in jugadores:
         # Usamos las constantes de columna que definiste en tu código original
@@ -403,7 +404,7 @@ def pintar_pista_interactiva(df, output_dir="outputs/html_pistas"):
         # --- RUTA DE GUARDADO (Tu original) ---
         salida_html = os.path.join(output_dir, f"pista_{jugador}_diferenciada.html")
         fig.write_html(salida_html)
-        print(f"✅ Archivo generado: {os.path.abspath(salida_html)}")
+        #print(f"✅ Archivo generado: {os.path.abspath(salida_html)}")
 
     print("✅ Finalizado: pistas interactivas creadas correctamente.")
 
@@ -418,6 +419,53 @@ def build_output_dir(base_dir, nombre_partido, marcador_texto):
     path = os.path.join(base_dir, nombre_partido, marcador_texto)
     os.makedirs(path, exist_ok=True)
     return path
+
+
+# ======================================================
+# ✂️ CORTAR DF POR SETS SEGÚN MARCADOR CONOCIDO
+# ======================================================
+
+def cortar_df_por_sets(df, marcador_sets: str):
+    """
+    Divide el DataFrame del partido en una lista de DFs, uno por set.
+    El marcador_sets debe venir como texto tipo '6-4 1-6 0-6'.
+    Usa el número total de juegos de cada set para determinar los cortes.
+    """
+    if "juego" not in df.columns:
+        raise ValueError("El DataFrame necesita una columna 'juego' numerada secuencialmente.")
+
+    # 1️⃣ Parseamos el marcador
+    sets = marcador_sets.strip().split()
+    juegos_por_set = []
+    for s in sets:
+        try:
+            a, b = map(int, s.split("-"))
+            juegos_por_set.append(a + b)
+        except:
+            print(f"⚠️ Formato de set no válido: {s}")
+
+    # 2️⃣ Calculamos límites acumulados
+    limites = np.cumsum(juegos_por_set)
+    total_juegos = limites[-1]
+
+    # 3️⃣ Verificamos número de juegos reales
+    max_juego_df = df["juego"].max()
+    if total_juegos > max_juego_df:
+        print(f"⚠️ El marcador ({total_juegos} juegos) excede los juegos reales ({max_juego_df}). Se ajustará al máximo.")
+        total_juegos = max_juego_df
+
+    # 4️⃣ Cortamos el DF
+    df_sets = []
+    start_game = 1
+    for i, limite in enumerate(limites):
+        subset = df[df["juego"].between(start_game, limite)].copy()
+        subset["set_manual"] = i + 1
+        df_sets.append(subset)
+        start_game = limite + 1
+
+    print(f"✂️ Partido dividido en {len(df_sets)} sets según marcador {marcador_sets}.")
+    return df_sets
+
 
 
 # ======================================================
@@ -442,10 +490,54 @@ def analizar_partido_interactivo():
     # === 3️⃣ Procesar marcador robusto sobre el DataFrame completo ===
     df_proc, df_resumen = procesar_marcador_robusto(df0)
 
+
     # === 4️⃣ Determinar fila de corte y marcador actual ===
     fila, marcador_completo = recortar_por_limite(df_proc, n_juegos, df_resumen)
     print(f"Este es el marcador completo hasta el corte: {marcador_completo}")
     #print(f"🎯 Marcador parcial — Juegos: {fila['juego_p1']}-{fila['juego_p2']} | Sets: {fila['set_p1']}-{fila['set_p2']}")
+
+    # === 4️⃣ BIS: Obtener marcador completo del partido ===
+    if not df_resumen.empty and "Marcador_Set" in df_resumen.columns:
+        marcador_total = " ".join(df_resumen["Marcador_Set"].tolist())
+        print(f"🏁 Marcador completo del partido: {marcador_total}")
+    else:
+        marcador_total = ""
+
+    
+    # === 6️⃣ Crear carpeta de salida ===
+    base = os.path.join("outputs", "figures")
+    out_dir = build_output_dir(base, nombre_partido, marcador_completo)
+    print(f"📁 Resultados guardados en: {os.path.abspath(out_dir)}")
+
+    # Asegurar columna 'juego' secuencial a partir del contador acumulado
+    if "juegos_totales_acumulados" in df_proc.columns:
+        df_proc["juego"] = df_proc["juegos_totales_acumulados"]
+    else:
+        # fallback: numerar por orden si por algún motivo no existe
+        df_proc["juego"] = np.arange(1, len(df_proc) + 1)
+
+    print(f"🧩 Añadida columna 'juego' para corte: {df_proc['juego'].nunique()} valores únicos")
+
+
+    df_sets = cortar_df_por_sets(df_proc, marcador_total)
+
+    for i, df_set in enumerate(df_sets, start=1):
+        print(f"\n🏁 Procesando set {i}")
+        df_set_rec = clasificar_eventos(df_set)
+        resumen = resumen_metricas_por_jugador(df_set_rec)
+        resumen["set"] = i
+        resumen.to_csv(os.path.join(out_dir, f"resumen_set_{i}.csv"), index=False)
+
+    resumenes = []
+    for i, df_set in enumerate(df_sets, start=1):
+        df_set_rec = clasificar_eventos(df_set)
+        r = resumen_metricas_por_jugador(df_set_rec)
+        r["set"] = i
+        resumenes.append(r)
+
+    df_resumen_todos = pd.concat(resumenes, ignore_index=True)
+    df_resumen_todos.to_csv(os.path.join(out_dir, "resumen_metricas_por_set.csv"), index=False)
+
 
     # === 5️⃣ Cortar el DataFrame original hasta esa fila ===
     if "clip_start" in df0.columns:
@@ -454,12 +546,7 @@ def analizar_partido_interactivo():
         df_cortado = df0.loc[:idx_corte].copy()
     else:
         df_cortado = df0.copy()  # Fallback
-    print(f"✂️  DataFrame recortado hasta fila {idx_corte} ({len(df_cortado)} filas).")
-
-    # === 6️⃣ Crear carpeta de salida ===
-    base = os.path.join("outputs", "figures")
-    out_dir = build_output_dir(base, nombre_partido, marcador_completo)
-    print(f"📁 Resultados guardados en: {os.path.abspath(out_dir)}")
+    #print(f"✂️  DataFrame recortado hasta fila {idx_corte} ({len(df_cortado)} filas)."
 
     # === 7️⃣ Clasificación y métricas usando solo el DF recortado ===
     df_rec = clasificar_eventos(df_cortado)
@@ -470,7 +557,7 @@ def analizar_partido_interactivo():
     else:
         resumen = resumen_metricas_por_jugador(df_rec)
         resumen.to_csv(os.path.join(out_dir, "resumen_metricas.csv"), index=False)
-        print(f"✅ Resumen guardado en {out_dir}")
+        #print(f"✅ Resumen guardado en {out_dir}")
 
         # === 8️⃣ Visualizaciones ===
         top_golpes_por_jugador(df_rec, output_dir=out_dir)
@@ -486,7 +573,8 @@ def analizar_partido_interactivo():
 
         #print(f"✅ Usando columnas: {COL_INICIO_X}, {COL_INICIO_Y}, {COL_FIN_X}, {COL_FIN_Y}")
 
-        pintar_pista_interactiva(df_rec, output_dir=out_dir)
+        #pintar_pista_interactiva(df_rec, output_dir=out_dir)
+
 
     print("\n✅ Análisis completo.")
     return df_cortado, marcador_completo, out_dir
