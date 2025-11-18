@@ -579,6 +579,7 @@ def analizar_partido_interactivo():
 
     # === 7️⃣ Clasificación y métricas usando solo el DF recortado ===
     df_rec = clasificar_eventos(df_cortado)
+    df_tot = clasificar_eventos(df_rec)
 
     # Validar que tenga columna 'jugador'
     if "jugador" not in df_rec.columns:
@@ -602,8 +603,13 @@ def analizar_partido_interactivo():
 
         #print(f"✅ Usando columnas: {COL_INICIO_X}, {COL_INICIO_Y}, {COL_FIN_X}, {COL_FIN_Y}")
 
-        #pintar_pista_interactiva(df_rec, output_dir=out_dir)
+        pintar_pista_interactiva(df_rec, output_dir=out_dir)
 
+
+    # === Guardar eventos ya clasificados para el recomendador de nivel 2 ===
+    eventos_path = os.path.join(out_dir, "eventos_completos.csv")
+    df_tot.to_csv(eventos_path, index=False)
+    print(f"💾 Archivo para recomendador guardado: {os.path.abspath(eventos_path)}")
 
     print("\n✅ Análisis completo.")
     return df_cortado, marcador_completo, out_dir

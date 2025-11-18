@@ -1,0 +1,5 @@
+si he sacado y si he ganado, (saco o resto y gano o pierdo) por juego dentro de cada set. Variable marcador
+Porcentaje histograma global, dos colores si gano o pierdo, %bolas dentro por juego
+quiero pintar cuando saca, cuando pierde, cuando, heat map play a lo largo de los juegos ver cambios
+
+Tener en un df análisis por juegos
