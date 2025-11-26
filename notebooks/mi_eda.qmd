@@ -1,0 +1,15 @@
+---
+title: "Mi primer EDA"
+author: "Yo"
+format: html
+execute:
+  echo: true
+---
+
+# Introducción
+
+Este es mi primer documento Quarto usando Python.
+
+```python
+print("Hola desde Python y Quarto!")
+```
