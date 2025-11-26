@@ -159,5 +159,48 @@ def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
     # 5️⃣ Ajustar tipos de datos modernos (pandas 2.x)
     df = df.convert_dtypes()
 
+    # ==========================================
+    # 6️⃣ NORMALIZACIÓN FINAL DE COORDENADAS
+    # ==========================================
+    COORD_MAP = {
+        # posibles variantes originales
+        "inicio_golpe_x": "inicio_x",
+        "inicio_gople_x": "inicio_x",
+        "inicio_golpe:y": "inicio_y",
+        "inicio_gople:y": "inicio_y",
+        "inicio_golpe:x": "inicio_x",
+        "inicio_golpe:y": "inicio_y",
+        "inicio_golpe_x": "inicio_x",
+        "inicio_golpe_y": "inicio_y",
+
+        # tu CSV original
+        "inicio_gople: x": "inicio_x",
+        "inicio_gople: y": "inicio_y",
+        "fin_golpe: x": "fin_x",
+        "fin_golpe: y": "fin_y",
+
+        # versiones de normalizar_columnas
+        "inicio_golpe_x": "inicio_x",
+        "inicio_golpe_y": "inicio_y",
+        "golpe_inicio_x": "inicio_x",
+        "golpe_inicio_y": "inicio_y",
+        "golpe_fin_x": "fin_x",
+        "golpe_fin_y": "fin_y",
+    }
+
+    df = df.rename(columns={c: COORD_MAP[c] for c in df.columns if c in COORD_MAP})
+
+    # asegurar que existan aunque estén vacías (para no borrarlas después)
+    for col in ["inicio_x", "inicio_y", "fin_x", "fin_y"]:
+        if col not in df.columns:
+            df[col] = pd.NA
+    # 7️⃣ NO ELIMINAR columnas de coordenadas aunque estén vacías
+    cols_empty = [
+        c for c in df.columns 
+        if df[c].isna().all() and c not in ["inicio_x", "inicio_y", "fin_x", "fin_y"]
+    ]
+    df = df.drop(columns=cols_empty, errors="ignore")
+
+
     return df
 
