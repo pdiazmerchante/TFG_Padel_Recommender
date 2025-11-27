@@ -3,7 +3,7 @@ title: "Untitled"
 format: html
 ---
 
-```python
-print("HOLA QUARTO EJECUTANDO")
-2+2
+
+```{python}
+print("Hola")
 ```

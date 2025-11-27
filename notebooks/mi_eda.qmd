@@ -21,18 +21,13 @@ El objetivo es comprender la estructura del dataset, examinar la distribución d
 
 # Importación de datos y carga de paquetes
 
-```python
+```{python}
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 ```
 
-```python
-print("Hola mundo desde Quarto y Python!")
-```
-
-
-```python
+```{python}
 df = pd.read_excel("resumen_juegos.xlsx")
 df.head()
 ```
@@ -68,131 +63,27 @@ winner_% → % de golpes ganadores.
 total_% → suma al 100% (indicador de control).
 
 El último registro SUMA resume el total del partido.
+
 5. Inspección inicial
-5.1 Primeras filas del dataset
-```python
-df.head(10)
-```
+
 
 5.2 Información general
-```python
+```{python}
 df.info()
 ```
 
 5.3 Resumen numérico
-```python
+```{python}
 df.describe(include="all")
 ```
 
 5.4 Valores faltantes
-```python
+```{python}
 df.isna().sum()
 ```
 
-6. Limpieza y creación de nuevas variables
 
-Convertimos la columna fecha y generamos la variable diferencia:
-```python
-df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
-df["diferencia"] = abs(df["puntuacion_A"] - df["puntuacion_B"])
-df.head()
-```
-
-7. Análisis univariante
-7.1 Distribución de puntuaciones (Pareja A)
-```python
-plt.figure(figsize=(7,4))
-sns.histplot(df["puntuacion_A"], kde=True)
-plt.title("Distribución de puntos - Pareja A")
-plt.xlabel("Puntuación A")
-plt.show()
-```
-
-7.2 Distribución de puntuaciones (Pareja B)
-```python
-plt.figure(figsize=(7,4))
-sns.histplot(df["puntuacion_B"], kde=True)
-plt.title("Distribución de puntos - Pareja B")
-plt.xlabel("Puntuación B")
-plt.show()
-```
-
-7.3 Ganadores del partido
-```python
-plt.figure(figsize=(6,4))
-sns.countplot(data=df, x="ganador")
-plt.title("Frecuencia de parejas ganadoras")
-plt.xlabel("Ganador")
-plt.show()
-```
-
-7.4 Duración de los partidos
-```python
-plt.figure(figsize=(7,4))
-sns.histplot(df["duracion_min"], kde=True)
-plt.title("Distribución de duración de partidos (minutos)")
-plt.xlabel("Minutos")
-plt.show()
-```
-
-7.5 Diferencia de puntos
-```python
-plt.figure(figsize=(7,4))
-sns.histplot(df["diferencia"], kde=True)
-plt.title("Diferencia de puntos entre parejas")
-plt.xlabel("Diferencia")
-plt.show()
-```
-
-8. Análisis bivariante
-8.1 Relación entre puntuaciones A y B
-```python
-plt.figure(figsize=(6,6))
-sns.scatterplot(data=df, x="puntuacion_A", y="puntuacion_B", hue="ganador")
-plt.title("Relación entre puntuaciones A y B")
-plt.xlabel("Puntuación A")
-plt.ylabel("Puntuación B")
-plt.show()
-```
-
-8.2 Diferencia de puntos vs duración del partido
-```python
-plt.figure(figsize=(7,5))
-sns.scatterplot(data=df, x="diferencia", y="duracion_min")
-plt.title("Diferencia de puntos vs Duración del partido")
-plt.xlabel("Diferencia de puntos")
-plt.ylabel("Duración (min)")
-plt.show()
-```
-
-9. Análisis por jugadores
-9.1 Jugadores que más partidos juegan
-```python
-jugadores = pd.concat([
-    df["jugador_1"], df["jugador_2"],
-    df["jugador_3"], df["jugador_4"]
-])
-
-conteo_jugadores = jugadores.value_counts()
-conteo_jugadores.head(20)
-```
-
-9.2 Jugadores con más victorias
-```python
-def ganador_individual(row):
-    if row["ganador"] == "A":
-        return [row["jugador_1"], row["jugador_2"]]
-    else:
-        return [row["jugador_3"], row["jugador_4"]]
-
-df["ganadores"] = df.apply(ganador_individual, axis=1)
-
-ganadores_flat = pd.Series([g for lista in df["ganadores"] for g in lista])
-victorias = ganadores_flat.value_counts()
-victorias.head(20)
-```
-
-10. Conclusiones del EDA
+6. Conclusiones del EDA
 
 Las distribuciones de puntuación permiten evaluar si los partidos suelen estar equilibrados.
 
