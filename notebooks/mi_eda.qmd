@@ -1,5 +1,5 @@
 ---
-title: "EDA del Dataset de Pádel"
+title: "Sistema de recomendación de estrategias deportivas en pádel"
 author: "Pablo Díaz Merchante"
 format: 
   html:
@@ -14,7 +14,7 @@ execute:
 
 # Introducción y definición de objetivos
 
-En este documento realizamos un **Análisis Exploratorio de Datos (EDA)** del conjunto `resumen_juegos.xlsx`, que contiene información detallada de partidos de pádel.  
+En este documento se realiza un **Análisis Exploratorio de Datos (EDA)** del conjunto `resumen_juegos.xlsx`, que contiene información detallada de partidos de pádel.  
 El objetivo es comprender la estructura del dataset, examinar la distribución de las variables numéricas y categóricas, estudiar relaciones relevantes entre variables y obtener conclusiones iniciales de cara a futuros modelos de recomendación.
 
 ---
@@ -29,61 +29,70 @@ import matplotlib.pyplot as plt
 
 ```{python}
 df = pd.read_excel("resumen_juegos.xlsx")
-df.head()
 ```
 
 # Diccionario de datos
 
-- Variables base
 
-jugador → Nombre del jugador evaluado.
+1. Variables base
 
-bola dentro → Número de golpes que entraron correctamente.
+-jugador → Nombre del jugador evaluado.
 
-error no forzado → Errores cometidos sin presión del rival.
+-bola dentro → Número de golpes que entraron correctamente.
 
-missed → Golpes fallados ("fallos no ejecutados").
+-error no forzado → Errores cometidos sin presión del rival.
 
-winner → Golpes ganadores (terminan el punto).
+-missed → Golpes fallados o no ejecutados correctamente.
 
-total → Total de golpes registrados.
+-winner → Golpes ganadores (terminan el punto).
 
-- Porcentajes
+-total → Número total de golpes registrados.
 
-Cada métrica está también expresada como porcentaje sobre su total:
+2. Porcentajes asociados
 
-bola dentro_% → % de golpes que entraron.
+Cada métrica tiene también su versión porcentual respecto al total de golpes:
 
-error no forzado_% → % de errores no forzados.
+-bola dentro_% → % de golpes que entraron.
 
-missed_% → % de fallos.
+-error no forzado_% → % de errores no forzados.
 
-winner_% → % de golpes ganadores.
+-missed_% → % de fallos.
 
-total_% → suma al 100% (indicador de control).
+-winner_% → % de golpes ganadores.
 
-El último registro SUMA resume el total del partido.
+-total_% → Suma del 100% (indicador de control).
 
-5. Inspección inicial
+3. Nota final
+
+El último registro llamado SUMA corresponde al resumen global del partido.
+
+# Muestra del dataset
 
 
-5.2 Información general
+```{python}
+df.head()
+```
+
+
+# Análisis exploratorio de datos
+
 ```{python}
 df.info()
 ```
 
-5.3 Resumen numérico
+Resumen numérico
 ```{python}
 df.describe(include="all")
 ```
 
-5.4 Valores faltantes
+Valores faltantes
 ```{python}
 df.isna().sum()
 ```
 
 
-6. Conclusiones del EDA
+# Conclusiones 
+
 
 Las distribuciones de puntuación permiten evaluar si los partidos suelen estar equilibrados.
 
