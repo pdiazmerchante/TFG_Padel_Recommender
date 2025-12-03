@@ -117,14 +117,20 @@ def resumen_metricas_por_jugador(df):
     tabla = df.groupby([COL_JUGADOR, COL_CATEG]).size().unstack(fill_value=0)
     tabla["total"] = tabla.sum(axis=1)
 
+    # porcentajes
     porcentajes = tabla.div(tabla["total"], axis=0).mul(100).round(2)
 
+    # unimos ambas tablas
     full = pd.concat([tabla, porcentajes.add_suffix("_%")], axis=1)
 
-    # === SUMA / MEDIA / STD ===
+    # SUMA correcta
     full.loc["SUMA"] = full.sum(numeric_only=True)
-    full.loc["MEDIA"] = full.mean(numeric_only=True).round(2)
-    full.loc["STD"] = full.std(numeric_only=True).round(2)
+
+    # --- MEDIA Y STD CORRECTAS (sin contar SUMA) ---
+    jugadores = full.drop(index="SUMA")   # eliminamos SUMA TEMPORALMENTE
+
+    full.loc["MEDIA"] = jugadores.mean(numeric_only=True).round(2)
+    full.loc["STD"] = jugadores.std(numeric_only=True).round(2)
 
     return full.reset_index()
 
@@ -325,14 +331,41 @@ def exportar_metricas(df, out):
         res_s.to_excel(os.path.join(out, f"resumen_set_{s}.xlsx"), index=False)
 
     # --- Juegos: UN SOLO ARCHIVO ---
-    writer = pd.ExcelWriter(os.path.join(out, "resumen_juegos.xlsx"), engine="xlsxwriter")
+    #writer = pd.ExcelWriter(os.path.join(out, "resumen_juegos.xlsx"), engine="xlsxwriter")
+
+    #for j in range(1, max_juego+1):
+        #res_j = resumen_metricas_por_jugador(df[df["juego_real"] == j])
+        #res_j.to_excel(writer, sheet_name=f"Juego_{j}", index=False)
+
+    #writer.close()
+    #print("   ✔ resumen_juegos.xlsx generado\n")
+    # --- Juegos: UNA SOLA HOJA --- 
+    rows = []
 
     for j in range(1, max_juego+1):
-        res_j = resumen_metricas_por_jugador(df[df["juego_real"] == j])
-        res_j.to_excel(writer, sheet_name=f"Juego_{j}", index=False)
 
-    writer.close()
-    print("   ✔ resumen_juegos.xlsx generado\n")
+        df_j = df[df["juego_real"] == j]
+        set_j = df_j["set_real"].iloc[0]  # set correspondiente al juego
+
+        resumen_j = resumen_metricas_por_jugador(df_j)
+        resumen_j["set"] = set_j
+        resumen_j["juego"] = j
+
+        # turno de saque por jugador — si existe la columna sacador
+        if "sacador" in df_j.columns:
+            sacador = df_j["sacador"].iloc[0]
+            resumen_j["saque_turno"] = resumen_j["jugador"].apply(lambda x: x == sacador)
+        else:
+            resumen_j["saque_turno"] = np.nan
+
+        rows.append(resumen_j)
+
+    # unimos todas las tablas de juegos
+    df_juegos = pd.concat(rows, ignore_index=True)
+
+    df_juegos.to_excel(os.path.join(out, "resumen_juegos.xlsx"), index=False)
+    print("   ✔ resumen_juegos.xlsx generado como una sola hoja (formato largo)\n")
+
 
 def top_golpes_partido(df, output_dir):
     print("🎯 TOP golpes del partido entero")
@@ -507,6 +540,7 @@ def analizar_partido_completo_trazado(
     stats_saque.to_excel(os.path.join(out_dir, "estadisticas_saque.xlsx"), index=False)
 
     print("📄 Estadísticas de saque guardadas en estadisticas_saque.xlsx")
+    #print(df['servicio'].dropna().astype(str).unique()[:20])
 
 
 
@@ -520,3 +554,5 @@ def analizar_partido_completo_trazado(
 
 if __name__ == "__main__":
     analizar_partido_completo_trazado()
+
+

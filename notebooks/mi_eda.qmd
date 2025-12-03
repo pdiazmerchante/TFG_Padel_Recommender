@@ -1,10 +1,12 @@
 ---
-title: "Sistema de recomendación de estrategias deportivas en pádel"
+title: "EDA - Sistema de recomendación de estrategias deportivas en pádel"
 author: "Pablo Díaz Merchante"
 format: 
   html:
     toc: true
     toc-location: left
+    self-contained: true
+    embed-resources: true
 execute:
   python: "C:/Users/user/Desktop/TFG_Padel_Recommender/.venv/Scripts/python.exe"
   echo: true
@@ -12,98 +14,331 @@ execute:
   message: true
 ---
 
+
+
+
 # Introducción y definición de objetivos
 
-En este documento se realiza un **Análisis Exploratorio de Datos (EDA)** del conjunto `resumen_juegos.xlsx`, que contiene información detallada de partidos de pádel.  
-El objetivo es comprender la estructura del dataset, examinar la distribución de las variables numéricas y categóricas, estudiar relaciones relevantes entre variables y obtener conclusiones iniciales de cara a futuros modelos de recomendación.
+Este documento realiza un Análisis Exploratorio de Datos (EDA) del dataset resumen_juegos.xlsx, centrado en evaluar el rendimiento de los jugadores de pádel y preparar el terreno para la creación del sistema de recomendación de estrategias.
+Se estudian:
 
----
+- Estructura del dataset
+
+- Distribución de todas las variables
+
+- Comparaciones por jugador
+
+- Relaciones estadísticas entre métricas
+
+- Posibles patrones útiles para el recomendador
 
 # Importación de datos y carga de paquetes
 
 ```{python}
 import pandas as pd
+import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+
+sns.set(style="whitegrid")
+
+# Cargar todas las hojas del Excel
+
+#sheets = pd.read_excel("resumen_juegos.xlsx", sheet_name=None)
+
+#df_list = []
+
+#for name, sheet in sheets.items():
+  #sheet["partido"] = name  # Añadimos nombre del partido
+  #df_list.append(sheet)
+
+# Unimos todo en un único DataFrame
+
+#df = pd.concat(df_list, ignore_index=True)
+
+#df.head()
+
+
+df = pd.read_excel("resumen_partido.xlsx")
+df.head()
+
+
 ```
 
-```{python}
-df = pd.read_excel("resumen_juegos.xlsx")
-```
 
 # Diccionario de datos
 
+- jugador: nombre del jugador
 
-1. Variables base
+- bola dentro: golpes correctos
 
--jugador → Nombre del jugador evaluado.
+- error no forzado: fallos sin presión
 
--bola dentro → Número de golpes que entraron correctamente.
+- missed: fallos
 
--error no forzado → Errores cometidos sin presión del rival.
+- winner: golpes ganadores
 
--missed → Golpes fallados o no ejecutados correctamente.
+- total: golpes totales
 
--winner → Golpes ganadores (terminan el punto).
+Variables %: cada métrica expresada sobre el total
 
--total → Número total de golpes registrados.
+Se incluye una fila final denominada SUMA, que no pertenece al análisis jugador a jugador
 
-2. Porcentajes asociados
-
-Cada métrica tiene también su versión porcentual respecto al total de golpes:
-
--bola dentro_% → % de golpes que entraron.
-
--error no forzado_% → % de errores no forzados.
-
--missed_% → % de fallos.
-
--winner_% → % de golpes ganadores.
-
--total_% → Suma del 100% (indicador de control).
-
-3. Nota final
-
-El último registro llamado SUMA corresponde al resumen global del partido.
-
-# Muestra del dataset
-
-
+# Limpieza inicial
 ```{python}
-df.head()
-```
+# Eliminamos filas tipo SUMA
 
+df = df[df["jugador"].str.upper() != "SUMA"]
 
-# Análisis exploratorio de datos
+# Convirtiendo columnas numéricas correctamente
 
-```{python}
+numeric_cols_original = ["bola dentro", "error no forzado", "missed", "winner", "total"]
+
+for col in numeric_cols_original:
+  df[col] = pd.to_numeric(df[col], errors="coerce")
+
 df.info()
+
+
 ```
 
-Resumen numérico
+# Tratamiento de valores nulos
+
+En los datos, el hecho de que un valor sea 0 no es faltante, es algo que tiene sentido. Puede haber 0 errores no forzados y que no sea malo.
+
+```{python}
+# Rellenar valores vacíos con 0
+num_cols = ["bola dentro","error no forzado","missed","winner","total","fuerza error"]
+
+for col in num_cols:
+    if col in df.columns:
+        df[col] = df[col].fillna(0)
+
+# Recalcular porcentajes correctamente
+df["bola dentro_%"] = df["bola dentro"] / df["total"]
+df["error no forzado_%"] = df["error no forzado"] / df["total"]
+df["missed_%"] = df["missed"] / df["total"]
+df["winner_%"] = df["winner"] / df["total"]
+df["fuerza error_%"] = df["fuerza error"] / df["total"]
+
+
+
+```
+ 
+
+Crear la lista final de columnas
+```{python}
+pct_cols = ["bola dentro_%", "error no forzado_%", "missed_%", "winner_%"]
+numeric_cols = numeric_cols_original + pct_cols
+
+```
+
+
+
+# Resumen estadístico
 ```{python}
 df.describe(include="all")
+
 ```
 
-Valores faltantes
+# Análisis de valores faltantes y duplicados
 ```{python}
-df.isna().sum()
+print("Valores faltantes:")
+display(df.isna().sum())
+
+print("Duplicados:")
+df.duplicated().sum()
+
+
+```
+
+No tenemos valores faltantes en nuestro dataset
+
+# Distribución de variables numéricas (variable a variable)
+```{python}
+numeric_cols = ['bola dentro', 'error no forzado', 'missed', 'winner']
+
+for col in numeric_cols:
+    fig, axes = plt.subplots(2, 1, figsize=(7, 6))  # tamaño perfecto
+
+    # Histograma
+    sns.histplot(df[col], kde=True, ax=axes[0])
+    axes[0].set_title(f"Histograma de {col}", fontsize=11)
+    axes[0].set_xlabel("")  # quita texto extra
+
+    # Boxplot
+    sns.boxplot(x=df[col], ax=axes[1])
+    axes[1].set_title(f"Boxplot de {col}", fontsize=11)
+
+    plt.tight_layout()
+    plt.show()
+
 ```
 
 
-# Conclusiones 
+# Distribución de porcentajes
+```{python}
+pct_cols = [c for c in df.columns if c.endswith("%")]
+
+fig, axes = plt.subplots(len(pct_cols), 2, figsize=(12, 30))
+
+for i, col in enumerate(pct_cols):
+  sns.histplot(df[col], kde=True, ax=axes[i,0])
+  axes[i,0].set_title(f"Histograma de {col}")
+
+  sns.boxplot(x=df[col], ax=axes[i,1])
+  axes[i,1].set_title(f"Boxplot de {col}")
+
+plt.tight_layout()
+plt.show()
 
 
-Las distribuciones de puntuación permiten evaluar si los partidos suelen estar equilibrados.
-
-La pareja ganadora muestra patrones de puntuación que podrán ser usados en modelos predictivos.
-
-Las diferencias de puntos ayudan a detectar partidos ajustados o muy dominados.
-
-La duración del partido se comporta como un indicador indirecto del nivel de equilibrio.
-
-El análisis de participación y victorias por jugador permite identificar rendimiento individual y posibles sesgos competitivos.
-
-Este EDA establece la base para futuros modelos de recomendación o predicción sobre emparejamientos de jugadores
+```
 
 
+# Análisis por jugador
+
+## Estadísticas por jugador
+```{python}
+df.groupby("jugador")[numeric_cols + pct_cols].mean().round(2)
+```
+
+## Barplots comparativos por jugador
+```{python}
+plt.figure(figsize=(12,6))
+sns.barplot(data=df, x="jugador", y="bola dentro")
+plt.title("Bolas dentro por jugador")
+plt.xticks(rotation=45)
+plt.show()
+
+```
+
+
+```{python}
+plt.figure(figsize=(12,6))
+sns.barplot(data=df, x="jugador", y="missed")
+plt.title("Missed por jugador")
+plt.xticks(rotation=45)
+plt.show()
+
+```
+
+```{python}
+plt.figure(figsize=(12,6))
+sns.barplot(data=df, x="jugador", y="error no forzado")
+plt.title("Errores no forzados por jugador")
+plt.xticks(rotation=45)
+plt.show()
+
+```
+
+```{python}
+plt.figure(figsize=(12,6))
+sns.barplot(data=df, x="jugador", y="winner")
+plt.title("Winners por jugador")
+plt.xticks(rotation=45)
+plt.show()
+
+```
+
+
+# Radar chart: Perfil de jugador 
+
+```{python}
+import matplotlib.pyplot as plt
+from math import pi
+
+def radar_player(player):
+  data = df[df["jugador"] == player][pct_cols].mean()
+
+  categories = pct_cols
+  values = data.values.flatten().tolist()
+  values += values[:1]
+
+  angles = [n / float(len(categories)) * 2 * pi for n in range(len(categories))]
+  angles += angles[:1]
+
+  plt.figure(figsize=(6,6))
+  plt.polar(angles, values, linewidth=2)
+  plt.fill(angles, values, alpha=0.25)
+  plt.xticks(angles[:-1], categories)
+  plt.title(f"Radar de {player}")
+  plt.show()
+  # Ejemplo para el primer jugador
+
+  radar_player(df["jugador"].iloc[0])
+
+# Ejemplo para el primer jugador
+primer_jugador = df["jugador"].iloc[0] 
+radar_player(primer_jugador)
+```
+
+# Análisis comparativo entre jugadores
+
+## Ranking por métrica
+
+```{python}
+for col in pct_cols:
+  print(f"\nRanking por {col}")
+  display(df[["jugador", col]].sort_values(col, ascending=False).reset_index(drop=True))
+
+
+```
+
+# Correlación entre variables
+
+## Heatmap de correlaciones
+
+```{python}
+plt.figure(figsize=(12,6))
+sns.heatmap(df[numeric_cols + pct_cols].corr(), annot=True, cmap="coolwarm", fmt=".2f")
+plt.title("Matriz de correlación")
+plt.show()
+
+```
+
+## Pairplot de variables clave
+
+```{python}
+sns.pairplot(df[pct_cols])
+plt.show()
+
+```
+
+# Análisis de clúster (descubrimiento de perfiles de jugadores)
+
+```{python}
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+
+X = df[pct_cols].fillna(0)
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+kmeans = KMeans(n_clusters=3, random_state=42)
+df["cluster"] = kmeans.fit_predict(X_scaled)
+
+sns.scatterplot(data=df, x="winner_%", y="error no forzado_%", hue="cluster")
+plt.title("Clusterización de jugadores según rendimiento")
+plt.show()
+
+df[["jugador","cluster"]]
+
+```
+
+# Conclusiones del EDA
+
+- La distribución de errores, winners y bolas dentro muestra patrones claros entre jugadores, base para un modelo de recomendación.
+
+- Se detectan perfiles diferenciados: jugadores más ofensivos (más winners) y otros más consistentes (menos errores).
+
+- La correlación muestra relaciones útiles:
+
+- Más winners → más riesgo → más errores
+
+- Mayor bola dentro_% indica consistencia
+
+- La clusterización permite agrupar jugadores en perfiles tácticos, lo que facilita recomendar emparejamientos o estrategias.
+
+- Este EDA proporciona las bases necesarias para construir un recomendador de estrategias y parejas óptimas en pádel.

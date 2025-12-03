@@ -17,45 +17,60 @@ def inferir_parejas(df):
     if len(parejas) < 2:
         raise ValueError("No se detectaron dos parejas distintas en columna 'pareja'.")
 
-    pareja1 = parejas[0]
-    pareja2 = parejas[1]
+    pareja1, pareja2 = parejas[:2]
 
     df["pareja_id"] = df["pareja"].apply(lambda x: 1 if x == pareja1 else 2)
 
     return df, pareja1, pareja2
 
 
+
 # ============================================================
-# 2) EXTRAER SACADOR
+# 2) EXTRAER SACADOR (ROBUSTO)
 # ============================================================
 def extraer_sacador(df):
     """
-    Extrae nombre del sacador desde columna 'servicio':
-    Ejemplo:  '1º Servicio Federico Chingotto'
+    Detecta correctamente quién está sacando aunque:
+    - el jugador aparezca abreviado ("A. Tapia")
+    - aparezca solo apellido
+    - haya variaciones en formato
     """
+
     df = df.copy()
 
-    def obtener(serv):
+    # ---- Obtener apellido del texto del servicio ----
+    def obtener_apellido(serv):
         if pd.isna(serv):
             return None
-        parts = str(serv).strip().split(" ")
-        if len(parts) < 3:
+        partes = str(serv).split()
+        if len(partes) < 4:
             return None
-        return " ".join(parts[2:]).strip()
+        return partes[-1].strip().lower()
 
-    df["saca_jugador"] = df["servicio"].apply(obtener)
+    df["saca_apellido"] = df["servicio"].apply(obtener_apellido)
 
-    # comparación segura
-    df["jugador_clean"] = df["jugador"].astype(str).str.strip()
-    df["saca_clean"] = df["saca_jugador"].astype(str).str.strip()
+    # ---- Apellido real del jugador ----
+    df["jugador_apellido"] = df["jugador"].astype(str).apply(
+        lambda x: x.split()[-1].lower()
+    )
 
-    df["saca_pareja"] = df.apply(
-        lambda r: r["pareja_id"] if r["jugador_clean"] == r["saca_clean"] and r["saca_clean"] != "" else None,
+    # ---- True si ese jugador es el sacador ----
+    df["saca_turno"] = df["jugador_apellido"] == df["saca_apellido"]
+
+    # ---- Nombre del sacador ----
+    df["saca_jugador"] = df.apply(
+        lambda r: r["jugador"] if r["saca_turno"] else None,
         axis=1
     )
 
-    df = df.drop(columns=["jugador_clean", "saca_clean"])
+    # ---- Pareja que saca ----
+    df["saca_pareja"] = df.apply(
+        lambda r: r["pareja_id"] if r["saca_turno"] else None,
+        axis=1
+    )
+
     return df
+
 
 
 # ============================================================
@@ -63,8 +78,7 @@ def extraer_sacador(df):
 # ============================================================
 def inferir_ganador_punto(df):
     """
-    Detecta el ganador del punto comparando cambio en marcador_puntos.
-    SOLO se marca ganador cuando cambia 0/15/30/40/AD.
+    Detecta el ganador del punto comparando cambio en punto_p1 y punto_p2.
     """
     df = df.copy()
 
@@ -79,7 +93,9 @@ def inferir_ganador_punto(df):
         return None
 
     df["ganador_pareja"] = df.apply(ganador, axis=1)
+
     return df
+
 
 
 # ============================================================
@@ -89,8 +105,9 @@ def etiquetar_puntos_saque(df):
     df = df.copy()
 
     df["gana_punto_sacador"] = df.apply(
-        lambda r: True if r["ganador_pareja"] == r["saca_pareja"] else False
-        if (r["ganador_pareja"] is not None and r["saca_pareja"] is not None)
+        lambda r: (
+            True if r["ganador_pareja"] == r["saca_pareja"] else False
+        ) if (r["ganador_pareja"] is not None and r["saca_pareja"] is not None)
         else None,
         axis=1
     )
@@ -98,8 +115,9 @@ def etiquetar_puntos_saque(df):
     return df
 
 
+
 # ============================================================
-# 5) ESTADÍSTICAS COMPLETAS DE SAQUE (POR JUGADOR)
+# 5) ESTADÍSTICAS COMPLETAS DEL SAQUE
 # ============================================================
 def resumen_estadisticas_saque(df, pareja1, pareja2):
     """
@@ -110,29 +128,29 @@ def resumen_estadisticas_saque(df, pareja1, pareja2):
     - juegos ganados al saque
     - juegos perdidos al saque
     """
-    df = df.copy()
 
+    df = df.copy()
     datos = []
 
-    # jugadores únicos
     jugadores = df["jugador"].dropna().unique()
 
     for jugador in jugadores:
 
-        # pareja 1 o 2 de ese jugador
+        # ---- pareja del jugador ----
         pareja_id = df.loc[df["jugador"] == jugador, "pareja_id"].iloc[0]
 
-        # puntos donde ese jugador sacó
+        # ---- puntos donde este jugador sacó ----
         puntos_saque = df[df["saca_jugador"] == jugador]
 
         total = len(puntos_saque)
         ganados = puntos_saque["gana_punto_sacador"].sum() if total > 0 else 0
         pct = (ganados / total * 100) if total > 0 else 0
 
-        # juegos del jugador cuando sacaba su pareja
+        # ---- juegos donde la PAREJA sacaba ----
         juegos_saque = df[df["saca_pareja"] == pareja_id]
 
-        # juego ganado al saque = algún punto ganado por sacador durante ese juego
+        # un juego se considera ganado si en ese juego
+        # hubo al menos un punto donde gano el sacador
         juegos_ganados = (
             juegos_saque.groupby("juego_real")["gana_punto_sacador"]
             .max()
@@ -141,7 +159,6 @@ def resumen_estadisticas_saque(df, pareja1, pareja2):
         )
 
         juegos_totales = juegos_saque["juego_real"].nunique()
-
         juegos_perdidos = juegos_totales - juegos_ganados
 
         datos.append({
@@ -152,7 +169,7 @@ def resumen_estadisticas_saque(df, pareja1, pareja2):
             "puntos_saque_%": round(pct, 2),
             "juegos_saque_ganados": int(juegos_ganados),
             "juegos_saque_perdidos": int(juegos_perdidos),
-            "juegos_saque_totales": int(juegos_totales)
+            "juegos_saque_totales": int(juegos_totales),
         })
 
     return pd.DataFrame(datos)
