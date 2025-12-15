@@ -242,36 +242,8 @@ plt.show()
 ```
 
 
-# Radar chart: Perfil de jugador 
 
-```{python}
-import matplotlib.pyplot as plt
-from math import pi
 
-def radar_player(player):
-  data = df[df["jugador"] == player][pct_cols].mean()
-
-  categories = pct_cols
-  values = data.values.flatten().tolist()
-  values += values[:1]
-
-  angles = [n / float(len(categories)) * 2 * pi for n in range(len(categories))]
-  angles += angles[:1]
-
-  plt.figure(figsize=(6,6))
-  plt.polar(angles, values, linewidth=2)
-  plt.fill(angles, values, alpha=0.25)
-  plt.xticks(angles[:-1], categories)
-  plt.title(f"Radar de {player}")
-  plt.show()
-  # Ejemplo para el primer jugador
-
-  radar_player(df["jugador"].iloc[0])
-
-# Ejemplo para el primer jugador
-primer_jugador = df["jugador"].iloc[0] 
-radar_player(primer_jugador)
-```
 
 # Análisis comparativo entre jugadores
 
@@ -310,20 +282,32 @@ plt.show()
 ```{python}
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-X = df[pct_cols].fillna(0)
+# 1. FILTRADO: Excluimos las filas donde 'jugador' sea MEDIA o STD
+# El símbolo '~' significa "NO", y '.isin' comprueba si está en la lista.
+df_clean = df[~df["jugador"].isin(["MEDIA", "STD"])].copy()
 
+# 2. Preparamos los datos usando el dataframe filtrado (df_clean)
+X = df_clean[pct_cols].fillna(0)
+
+# 3. Escalado
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
+# 4. Clusterización
 kmeans = KMeans(n_clusters=3, random_state=42)
-df["cluster"] = kmeans.fit_predict(X_scaled)
+# Importante: Asignamos el cluster al dataframe filtrado, no al original completo
+df_clean["cluster"] = kmeans.fit_predict(X_scaled)
 
-sns.scatterplot(data=df, x="winner_%", y="error no forzado_%", hue="cluster")
-plt.title("Clusterización de jugadores según rendimiento")
+# 5. Visualización
+sns.scatterplot(data=df_clean, x="winner_%", y="error no forzado_%", hue="cluster")
+plt.title("Clusterización de jugadores según rendimiento (Sin MEDIA/STD)")
 plt.show()
 
-df[["jugador","cluster"]]
+# Mostrar resultados
+print(df_clean[["jugador", "cluster"]])
 
 ```
 

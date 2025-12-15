@@ -321,50 +321,85 @@ def exportar_metricas(df, out):
 
     print(f"   Sets: {max_set} | Juegos: {max_juego}")
 
-    # --- Partido ---
+    # =====================
+    # RESUMEN PARTIDO
+    # =====================
     resumen = resumen_metricas_por_jugador(df)
+    resumen = resumen[~resumen["jugador"].isin(["SUMA", "MEDIA", "STD"])]
     resumen.to_excel(os.path.join(out, "resumen_partido.xlsx"), index=False)
 
-    # --- Sets ---
-    for s in range(1, max_set+1):
+    # =====================
+    # RESUMEN POR SET
+    # =====================
+    for s in range(1, max_set + 1):
         res_s = resumen_metricas_por_jugador(df[df["set_real"] == s])
+        res_s = res_s[~res_s["jugador"].isin(["SUMA", "MEDIA", "STD"])]
         res_s.to_excel(os.path.join(out, f"resumen_set_{s}.xlsx"), index=False)
 
-    # --- Juegos: UN SOLO ARCHIVO ---
-    #writer = pd.ExcelWriter(os.path.join(out, "resumen_juegos.xlsx"), engine="xlsxwriter")
-
-    #for j in range(1, max_juego+1):
-        #res_j = resumen_metricas_por_jugador(df[df["juego_real"] == j])
-        #res_j.to_excel(writer, sheet_name=f"Juego_{j}", index=False)
-
-    #writer.close()
-    #print("   ✔ resumen_juegos.xlsx generado\n")
-    # --- Juegos: UNA SOLA HOJA --- 
+    # =====================
+    # RESUMEN POR JUEGO
+    # =====================
     rows = []
 
-    for j in range(1, max_juego+1):
+    for j in range(1, max_juego + 1):
 
         df_j = df[df["juego_real"] == j]
-        set_j = df_j["set_real"].iloc[0]  # set correspondiente al juego
+        set_j = df_j["set_real"].iloc[0]
 
+        # 1) Resumen de golpes sin SUMA / MEDIA / STD
         resumen_j = resumen_metricas_por_jugador(df_j)
+        resumen_j = resumen_j[~resumen_j["jugador"].isin(["SUMA", "MEDIA", "STD"])]
+
+        # 2) Marcador final del juego
+        marcador_final = df_j["marcador"].iloc[-1]
+        resumen_j["marcador_final"] = marcador_final
         resumen_j["set"] = set_j
         resumen_j["juego"] = j
 
-        # turno de saque por jugador — si existe la columna sacador
-        if "sacador" in df_j.columns:
-            sacador = df_j["sacador"].iloc[0]
-            resumen_j["saque_turno"] = resumen_j["jugador"].apply(lambda x: x == sacador)
+        # 3) Info de saque (1 / 2 / 3)
+        saca_jugador = df_j["saca_jugador"].dropna().unique()
+        if len(saca_jugador) > 0:
+            saca_jugador = saca_jugador[0]
         else:
-            resumen_j["saque_turno"] = np.nan
+            saca_jugador = None
+
+        saca_pareja = df_j["saca_pareja"].dropna().unique()
+        if len(saca_pareja) > 0:
+            saca_pareja = saca_pareja[0]
+        else:
+            saca_pareja = None
+
+        def info_saque(jugador):
+            pareja_j = df[df["jugador"] == jugador]["pareja_id"].iloc[0]
+
+            if saca_jugador is None:
+                return np.nan
+            if jugador == saca_jugador:
+                return 1
+            if pareja_j == saca_pareja:
+                return 2
+            return 3
+
+        resumen_j["info_saque"] = resumen_j["jugador"].apply(info_saque)
+
+        # 4) Ganador del juego
+        ganador_pareja = df_j["ganador_pareja"].dropna().iloc[-1]
+
+        resumen_j["gano_juego"] = resumen_j["jugador"].apply(
+            lambda x: df[df["jugador"] == x]["pareja_id"].iloc[0] == ganador_pareja
+        )
 
         rows.append(resumen_j)
 
-    # unimos todas las tablas de juegos
-    df_juegos = pd.concat(rows, ignore_index=True)
+        # insertar fila separadora
+        rows.append(pd.DataFrame([[""] * len(resumen_j.columns)], columns=resumen_j.columns))
 
+    df_juegos = pd.concat(rows, ignore_index=True)
     df_juegos.to_excel(os.path.join(out, "resumen_juegos.xlsx"), index=False)
-    print("   ✔ resumen_juegos.xlsx generado como una sola hoja (formato largo)\n")
+
+    print("   ✔ resumen_juegos.xlsx generado correctamente.\n")
+
+
 
 
 def top_golpes_partido(df, output_dir):
@@ -521,28 +556,27 @@ def analizar_partido_completo_trazado(
     df = clasificar_eventos(df)
     df = reconstruir_marcadores(df)
 
-    exportar_metricas(df, out_dir)
-    top_golpes_por_set(df, out_dir)
-    pintar_pista_por_set(df, out_dir)
-    top_golpes_partido(df, out_dir)
-    pintar_pista_partido(df, out_dir)
-
-    # =============================
-    # 💥 NUEVO: procesamiento saque
-    # =============================
+    # =====================================================
+    # 💥 NUEVO: procesamiento de saque SE HACE AQUÍ
+    # =====================================================
     df, pareja1, pareja2 = inferir_parejas(df)
     df = extraer_sacador(df)
     df = inferir_ganador_punto(df)
     df = etiquetar_puntos_saque(df)
 
-    # Guardar CSV de estadísticas de saque
+    # guardar estadísticas de saque
     stats_saque = resumen_estadisticas_saque(df, pareja1, pareja2)
     stats_saque.to_excel(os.path.join(out_dir, "estadisticas_saque.xlsx"), index=False)
+    print("📄 Estadísticas de saque guardadas en estadisticas_saque.xlsx\n")
 
-    print("📄 Estadísticas de saque guardadas en estadisticas_saque.xlsx")
-    #print(df['servicio'].dropna().astype(str).unique()[:20])
-
-
+    # =====================================================
+    # 📊 MÉTRICAS + GRÁFICOS (aquí ya existe saca_jugador)
+    # =====================================================
+    exportar_metricas(df, out_dir)
+    top_golpes_por_set(df, out_dir)
+    pintar_pista_por_set(df, out_dir)
+    top_golpes_partido(df, out_dir)
+    pintar_pista_partido(df, out_dir)
 
     print("\n========================================")
     print("✅ ANÁLISIS COMPLETO GENERADO EN:")
@@ -550,6 +584,7 @@ def analizar_partido_completo_trazado(
     print("========================================\n")
 
     return df
+
 
 
 if __name__ == "__main__":
