@@ -1,0 +1,735 @@
+import pandas as pd
+import numpy as np
+
+# =========================================================
+# CONFIG
+# =========================================================
+PATH = "25_Roterdam_Final_Chingalan_CoelloTapia CSV.csv"
+OUT_XLSX = "analisis_paredes.xlsx"
+OUT_PDF  = "informe_entrenador_paredes.pdf"
+
+MIN_POINTS_MEJOR_PARED = 8
+
+# PDF (legibilidad)
+MIN_N_WARN = 10              # muestra pequeña
+TOP_WALLS_PER_PLAYER = 5     # cuántas paredes (además de Sin pared) mostrar en panel visual
+TOP3 = 3
+
+# Nuevas páginas (contexto / decisión)
+TOP_PREV_SHOTS_PAGE4 = 10    # cuántas "bolas previas del rival" mostrar en página 4 (por jugador)
+MIN_N_CONTEXT = 6            # mínimo de N (strokes) para mostrar fila de contexto (evita ruido)
+
+# =========================================================
+# 1) CARGA
+# =========================================================
+df = pd.read_csv(PATH, sep=";", engine="python")
+
+cols_norm = ["Row Name", "Jugador", "Pareja", "Pared", "Golpe_q", "Winner", "Error", "Punto_win", "Punto_lost"]
+for c in cols_norm:
+    if c in df.columns:
+        df[c] = df[c].astype("string").str.strip()
+
+df["Clip Start"] = pd.to_numeric(df["Clip Start"], errors="coerce")
+df["Clip End"]   = pd.to_numeric(df["Clip End"], errors="coerce")
+
+# =========================================================
+# 2) TABLA DE PUNTOS
+# =========================================================
+if "Row Name" not in df.columns:
+    raise ValueError("No existe la columna 'Row Name'.")
+
+points = df[df["Row Name"].fillna("").eq("Punto")].copy()
+points = points.dropna(subset=["Clip Start", "Clip End"])
+if len(points) == 0:
+    raise ValueError("No se han encontrado filas con Row Name == 'Punto'.")
+
+points = points.rename(columns={
+    "Clip Start": "point_start",
+    "Clip End": "point_end",
+    "Punto_win": "pair_win",
+    "Punto_lost": "pair_lost",
+})
+points = points[["point_start", "point_end", "pair_win", "pair_lost"]].copy()
+points = points.sort_values("point_start").reset_index(drop=True)
+points["point_id"] = np.arange(len(points))
+
+# =========================================================
+# 3) ASIGNAR FILAS A point_id
+# =========================================================
+events = df.dropna(subset=["Clip Start"]).copy()
+events = events.sort_values("Clip Start").reset_index(drop=True)
+
+pstarts = points["point_start"].to_numpy()
+pends   = points["point_end"].to_numpy()
+
+idx = np.searchsorted(pstarts, events["Clip Start"].to_numpy(), side="right") - 1
+events["point_id"] = idx
+events = events[events["point_id"] >= 0].copy()
+valid = events["Clip Start"].to_numpy() <= pends[events["point_id"].to_numpy()]
+events = events[valid].copy()
+events = events.merge(points[["point_id", "pair_win", "pair_lost"]], on="point_id", how="left")
+
+# =========================================================
+# 4) DEFINIR GOLPES
+# =========================================================
+strokes = events.copy()
+strokes = strokes[strokes["Jugador"].notna()].copy()
+strokes = strokes[strokes["Golpe_q"].notna()].copy()
+
+strokes["Pared_clean"] = strokes["Pared"].fillna("Sin pared")
+
+strokes["is_winner"] = strokes["Winner"].fillna("").str.contains("Winner", case=False, na=False)
+strokes["is_error"]  = strokes["Error"].notna() & (strokes["Error"].fillna("") != "")
+strokes["mete"] = ~strokes["is_error"]
+
+# =========================================================
+# 5) RESULTADO DEL PUNTO PARA EL JUGADOR (si hay Pareja)
+# =========================================================
+strokes["player_pair"] = strokes["Pareja"]
+strokes["point_result_for_player"] = pd.Series(pd.NA, index=strokes.index, dtype="string")
+
+m = strokes["player_pair"].notna()
+strokes.loc[m & (strokes["player_pair"] == strokes["pair_win"]),  "point_result_for_player"] = "W"
+strokes.loc[m & (strokes["player_pair"] == strokes["pair_lost"]), "point_result_for_player"] = "L"
+
+# =========================================================
+# 6) USO
+# =========================================================
+usage = (
+    strokes.groupby(["Jugador", "Pared_clean"])
+    .size()
+    .reset_index(name="n_strokes")
+)
+totals = strokes.groupby("Jugador").size().reset_index(name="n_strokes_total")
+usage = usage.merge(totals, on="Jugador", how="left")
+usage["share"] = usage["n_strokes"] / usage["n_strokes_total"]
+
+# =========================================================
+# 7) WIN RATE CONDICIONADO A PARED (por puntos)
+# =========================================================
+strokes_wl = strokes[strokes["player_pair"].notna()].copy()
+
+player_wall_point = (
+    strokes_wl.groupby(["Jugador", "Pared_clean"])["point_id"]
+    .unique()
+    .reset_index()
+)
+player_wall_point = player_wall_point.explode("point_id").dropna(subset=["point_id"])
+player_wall_point["point_id"] = player_wall_point["point_id"].astype(int)
+
+player_pair_map = strokes_wl[["Jugador", "player_pair"]].drop_duplicates()
+player_wall_point = player_wall_point.merge(player_pair_map, on="Jugador", how="left")
+player_wall_point = player_wall_point.merge(points[["point_id", "pair_win", "pair_lost"]], on="point_id", how="left")
+
+player_wall_point["result"] = pd.Series(pd.NA, index=player_wall_point.index, dtype="string")
+m2 = player_wall_point["player_pair"].notna()
+player_wall_point.loc[m2 & (player_wall_point["player_pair"] == player_wall_point["pair_win"]),  "result"] = "W"
+player_wall_point.loc[m2 & (player_wall_point["player_pair"] == player_wall_point["pair_lost"]), "result"] = "L"
+
+cond = (
+    player_wall_point.dropna(subset=["result"])
+    .groupby(["Jugador", "Pared_clean"])["result"]
+    .value_counts()
+    .unstack(fill_value=0)
+    .reset_index()
+)
+for col in ["W", "L"]:
+    if col not in cond.columns:
+        cond[col] = 0
+cond["points_total_with_wall"] = cond["W"] + cond["L"]
+cond["win_rate_with_wall"] = np.where(
+    cond["points_total_with_wall"] > 0,
+    cond["W"] / cond["points_total_with_wall"],
+    np.nan
+)
+
+# =========================================================
+# 8) IMPACT (winner/error)
+# =========================================================
+impact = (
+    strokes.groupby(["Jugador", "Pared_clean"])
+    .agg(
+        n_strokes=("Pared_clean", "size"),
+        winners=("is_winner", "sum"),
+        errors=("is_error", "sum"),
+    )
+    .reset_index()
+)
+impact["winner_rate"] = np.where(impact["n_strokes"] > 0, impact["winners"] / impact["n_strokes"], np.nan)
+impact["error_rate"]  = np.where(impact["n_strokes"] > 0, impact["errors"] / impact["n_strokes"], np.nan)
+
+report = (
+    usage.merge(cond, on=["Jugador", "Pared_clean"], how="left")
+         .merge(impact, on=["Jugador", "Pared_clean"], how="left")
+)
+
+# =========================================================
+# 10) "MEJOR PARED" (no se usa en PDF; se exporta)
+# =========================================================
+rankable = report.copy()
+rankable = rankable[rankable["points_total_with_wall"].fillna(0) >= MIN_POINTS_MEJOR_PARED].copy()
+rankable["score"] = rankable["win_rate_with_wall"].fillna(0) - 0.5 * rankable["error_rate"].fillna(0)
+best_wall = (
+    rankable.sort_values(["Jugador", "score"], ascending=[True, False])
+            .groupby("Jugador")
+            .head(1)
+            [["Jugador", "Pared_clean", "points_total_with_wall", "win_rate_with_wall", "winner_rate", "error_rate", "score"]]
+            .reset_index(drop=True)
+)
+
+# =========================================================
+# 11) METE POR PARED (tabla base para PDF)
+# =========================================================
+rendimiento_pared = (
+    strokes.groupby(["Jugador", "Pared_clean"], as_index=False)
+    .agg(
+        N_golpes=("Golpe_q", "size"),
+        N_mete=("mete", "sum"),
+        N_error=("is_error", "sum"),
+        N_winner=("is_winner", "sum"),
+    )
+)
+rendimiento_pared["Pct_mete"]   = np.where(rendimiento_pared["N_golpes"] > 0, rendimiento_pared["N_mete"] / rendimiento_pared["N_golpes"], np.nan)
+rendimiento_pared["Pct_error"]  = np.where(rendimiento_pared["N_golpes"] > 0, rendimiento_pared["N_error"] / rendimiento_pared["N_golpes"], np.nan)
+rendimiento_pared["Pct_winner"] = np.where(rendimiento_pared["N_golpes"] > 0, rendimiento_pared["N_winner"] / rendimiento_pared["N_golpes"], np.nan)
+
+# =========================================================
+# 12) ORDENAR + KPIs DE CIERRE DEL PUNTO (Fin ≤2, mediana)
+# =========================================================
+strokes = strokes.sort_values(["point_id", "Clip Start"]).reset_index(drop=True)
+
+strokes["idx_in_point"] = strokes.groupby("point_id").cumcount()
+strokes["n_strokes_point"] = strokes.groupby("point_id")["idx_in_point"].transform("max") + 1
+strokes["remaining_after"] = (strokes["n_strokes_point"] - 1) - strokes["idx_in_point"]
+
+finish = (
+    strokes.groupby(["Jugador", "Pared_clean"], as_index=False)
+    .agg(
+        med_golpes_hasta_fin=("remaining_after", "median"),
+        pct_fin_le2=("remaining_after", lambda s: float(np.mean(s <= 2)) if len(s) else np.nan),
+    )
+)
+
+# =========================================================
+# 13) TRANSICIONES: siguiente golpe del rival (lo que ya tenías)
+# =========================================================
+strokes["Jugador_siguiente"] = strokes.groupby("point_id")["Jugador"].shift(-1)
+strokes["Golpe_siguiente"]   = strokes.groupby("point_id")["Golpe_q"].shift(-1)
+strokes["Pareja_siguiente"]  = strokes.groupby("point_id")["Pareja"].shift(-1)
+strokes["Pared_siguiente"]   = strokes.groupby("point_id")["Pared_clean"].shift(-1)
+
+strokes["Siguiente_es_rival"] = False
+m_pair = strokes["Pareja"].notna() & strokes["Pareja_siguiente"].notna()
+strokes.loc[m_pair & (strokes["Pareja"] != strokes["Pareja_siguiente"]), "Siguiente_es_rival"] = True
+
+m_no_pair = (~m_pair) & strokes["Jugador_siguiente"].notna()
+strokes.loc[m_no_pair & (strokes["Jugador_siguiente"] != strokes["Jugador"]), "Siguiente_es_rival"] = True
+
+trans = strokes[strokes["Siguiente_es_rival"] & strokes["Golpe_siguiente"].notna()].copy()
+
+trans_pared = (
+    trans.groupby(["Jugador", "Pared_clean", "Golpe_siguiente"], as_index=False)
+    .size()
+    .rename(columns={"size": "Conteo"})
+)
+trans_pared["Total"] = trans_pared.groupby(["Jugador", "Pared_clean"])["Conteo"].transform("sum")
+trans_pared["Probabilidad"] = np.where(trans_pared["Total"] > 0, trans_pared["Conteo"] / trans_pared["Total"], np.nan)
+trans_pared = trans_pared.rename(columns={"Pared_clean": "Pared_jugador", "Golpe_siguiente": "Golpe_rival_siguiente"})
+
+# =========================================================
+# 14) NUEVO: CONTEXTO PREVIO DEL RIVAL (qué te tiran antes)
+# =========================================================
+strokes["Jugador_anterior"] = strokes.groupby("point_id")["Jugador"].shift(1)
+strokes["Golpe_anterior"]   = strokes.groupby("point_id")["Golpe_q"].shift(1)
+strokes["Pareja_anterior"]  = strokes.groupby("point_id")["Pareja"].shift(1)
+strokes["Pared_anterior"]   = strokes.groupby("point_id")["Pared_clean"].shift(1)
+
+strokes["Anterior_es_rival"] = False
+m_pair_prev = strokes["Pareja"].notna() & strokes["Pareja_anterior"].notna()
+strokes.loc[m_pair_prev & (strokes["Pareja"] != strokes["Pareja_anterior"]), "Anterior_es_rival"] = True
+
+m_no_pair_prev = (~m_pair_prev) & strokes["Jugador_anterior"].notna()
+strokes.loc[m_no_pair_prev & (strokes["Jugador_anterior"] != strokes["Jugador"]), "Anterior_es_rival"] = True
+
+prev_ctx = strokes[strokes["Anterior_es_rival"] & strokes["Golpe_anterior"].notna()].copy()
+
+# Tabla: para cada pared del jugador, distribución de "golpe previo del rival"
+prev_pared = (
+    prev_ctx.groupby(["Jugador", "Pared_clean", "Golpe_anterior"], as_index=False)
+    .size()
+    .rename(columns={"size": "Conteo"})
+)
+prev_pared["Total"] = prev_pared.groupby(["Jugador", "Pared_clean"])["Conteo"].transform("sum")
+prev_pared["Probabilidad"] = np.where(prev_pared["Total"] > 0, prev_pared["Conteo"] / prev_pared["Total"], np.nan)
+prev_pared = prev_pared.rename(columns={"Pared_clean": "Pared_jugador", "Golpe_anterior": "Golpe_rival_previo"})
+
+# =========================================================
+# 15) NUEVO: TABLA DECISIÓN (SIN PARED vs CON PARED) POR BOLA PREVIA
+# =========================================================
+# Definición operacional:
+# - "Sin pared": Pared_clean == "Sin pared"
+# - "Con pared": Pared_clean != "Sin pared" (cualquier pared)
+prev_ctx_wl = prev_ctx[prev_ctx["player_pair"].notna()].copy()
+prev_ctx_wl["decision"] = np.where(prev_ctx_wl["Pared_clean"] == "Sin pared", "Sin pared", "Con pared")
+
+# Métricas por (Jugador, Golpe_rival_previo, decision)
+decision_strokes = (
+    prev_ctx_wl.groupby(["Jugador", "Golpe_anterior", "decision"], as_index=False)
+    .agg(
+        N_golpes=("Golpe_q", "size"),
+        Error_pct=("is_error", "mean"),
+        Winner_pct=("is_winner", "mean"),
+    )
+    .rename(columns={"Golpe_anterior": "Bola_rival_previa"})
+)
+
+# Win% pts (por puntos únicos) para esa condición
+# Construimos una tabla de puntos únicos por grupo
+tmp = prev_ctx_wl[["Jugador", "Golpe_anterior", "decision", "point_id", "player_pair"]].drop_duplicates()
+tmp = tmp.rename(columns={"Golpe_anterior": "Bola_rival_previa"})
+tmp = tmp.merge(points[["point_id", "pair_win", "pair_lost"]], on="point_id", how="left")
+
+tmp["result"] = pd.Series(pd.NA, index=tmp.index, dtype="string")
+m3 = tmp["player_pair"].notna()
+tmp.loc[m3 & (tmp["player_pair"] == tmp["pair_win"]),  "result"] = "W"
+tmp.loc[m3 & (tmp["player_pair"] == tmp["pair_lost"]), "result"] = "L"
+
+decision_points = (
+    tmp.dropna(subset=["result"])
+       .groupby(["Jugador", "Bola_rival_previa", "decision"])["result"]
+       .value_counts()
+       .unstack(fill_value=0)
+       .reset_index()
+)
+for col in ["W", "L"]:
+    if col not in decision_points.columns:
+        decision_points[col] = 0
+
+decision_points["N_pts"] = decision_points["W"] + decision_points["L"]
+decision_points["Win_pct_pts"] = np.where(decision_points["N_pts"] > 0, decision_points["W"] / decision_points["N_pts"], np.nan)
+
+decision_kpi = decision_strokes.merge(
+    decision_points[["Jugador", "Bola_rival_previa", "decision", "N_pts", "Win_pct_pts"]],
+    on=["Jugador", "Bola_rival_previa", "decision"],
+    how="left"
+)
+
+# Pivot para comparar en una sola fila: Sin pared vs Con pared
+# (y calcular delta de Win% pts y delta de Error%)
+def safe_delta(a, b):
+    if pd.isna(a) or pd.isna(b):
+        return np.nan
+    return float(b) - float(a)
+
+# =========================================================
+# 16) EXPORTAR A EXCEL
+# =========================================================
+with pd.ExcelWriter(OUT_XLSX, engine="openpyxl") as writer:
+    report.to_excel(writer, sheet_name="report_paredes", index=False)
+    best_wall.to_excel(writer, sheet_name="mejor_pared", index=False)
+    usage.to_excel(writer, sheet_name="uso", index=False)
+    cond.to_excel(writer, sheet_name="win_rate_cond", index=False)
+    impact.to_excel(writer, sheet_name="winner_error", index=False)
+    rendimiento_pared.to_excel(writer, sheet_name="rendimiento_pared", index=False)
+    finish.to_excel(writer, sheet_name="cierre_post_golpe", index=False)
+    trans_pared.to_excel(writer, sheet_name="next_golpe_jugador_pared", index=False)
+
+    # Nuevas hojas
+    prev_pared.to_excel(writer, sheet_name="previo_rival_por_pared", index=False)
+    decision_kpi.to_excel(writer, sheet_name="decision_prev_rival", index=False)
+
+print(f"\nExcel exportado: {OUT_XLSX}")
+
+# =========================================================
+# PDF PROFESIONAL (4 páginas) – Visual y conciso
+# =========================================================
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+
+import matplotlib.pyplot as plt
+import os
+import tempfile
+
+styles = getSampleStyleSheet()
+styles.add(ParagraphStyle(name="Small", parent=styles["BodyText"], fontSize=9, leading=11))
+styles.add(ParagraphStyle(name="Tiny", parent=styles["BodyText"], fontSize=8, leading=10))
+
+def pct0(x):
+    if pd.isna(x): return ""
+    return f"{float(x)*100:.0f}%"
+
+def df_table(df_in: pd.DataFrame, col_widths, font_size=8):
+    data = [list(df_in.columns)] + df_in.astype(str).values.tolist()
+    t = Table(data, repeatRows=1, colWidths=col_widths)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+        ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,-1), font_size),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.white]),
+        ("LEFTPADDING", (0,0), (-1,-1), 3),
+        ("RIGHTPADDING", (0,0), (-1,-1), 3),
+        ("TOPPADDING", (0,0), (-1,-1), 2),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+    ]))
+    return t
+
+# Preparar bases
+rend = rendimiento_pared.rename(columns={"Pared_clean": "Pared"}).copy()
+players = sorted(rend["Jugador"].dropna().unique().tolist())
+
+# KPIs compactos para la tabla del panel (sin recargar)
+kpis_pdf = (
+    rendimiento_pared.rename(columns={"Pared_clean": "Pared"})
+    .merge(cond.rename(columns={"Pared_clean": "Pared"}), on=["Jugador", "Pared"], how="left")
+    .merge(finish.rename(columns={"Pared_clean": "Pared"}), on=["Jugador", "Pared"], how="left")
+)
+
+# ============
+# Página 1: Panel por jugador (tabla + gráfico simple)
+# ============
+def make_player_panel_table(player: str) -> pd.DataFrame:
+    sub = kpis_pdf[kpis_pdf["Jugador"] == player].copy()
+
+    sp = sub[sub["Pared"] == "Sin pared"].copy()
+    sp_mete = sp["Pct_mete"].iloc[0] if len(sp) else np.nan
+    sp_err  = sp["Pct_error"].iloc[0] if len(sp) else np.nan
+    sp_win  = sp["Pct_winner"].iloc[0] if len(sp) else np.nan
+    sp_n    = int(sp["N_golpes"].iloc[0]) if len(sp) else 0
+
+    sp_wr_pts = sp["win_rate_with_wall"].iloc[0] if len(sp) else np.nan
+    sp_n_pts  = int(sp["points_total_with_wall"].iloc[0]) if (len(sp) and not pd.isna(sp["points_total_with_wall"].iloc[0])) else 0
+    sp_fin2   = sp["pct_fin_le2"].iloc[0] if len(sp) else np.nan
+
+    top = sub[sub["Pared"] != "Sin pared"].sort_values("N_golpes", ascending=False).head(TOP_WALLS_PER_PLAYER)
+
+    def label_pared(pared, n):
+        mark = "*" if int(n) < MIN_N_WARN else ""
+        return f"{pared}{mark}"
+
+    rows = []
+    rows.append({
+        "Pared": label_pared("Sin pared", sp_n),
+        "N": sp_n,
+        "Mete%": pct0(sp_mete),
+        "Error%": pct0(sp_err),
+        "Winner%": pct0(sp_win),
+        "Win% pts": pct0(sp_wr_pts),
+        "N pts": sp_n_pts if sp_n_pts else "",
+        "Fin≤2": pct0(sp_fin2),
+    })
+
+    for _, r in top.iterrows():
+        n_g = int(r["N_golpes"])
+        rows.append({
+            "Pared": label_pared(f"{r['Pared']}", n_g),
+            "N": n_g,
+            "Mete%": pct0(r["Pct_mete"]),
+            "Error%": pct0(r["Pct_error"]),
+            "Winner%": pct0(r["Pct_winner"]),
+            "Win% pts": pct0(r.get("win_rate_with_wall", np.nan)),
+            "N pts": int(r["points_total_with_wall"]) if (not pd.isna(r.get("points_total_with_wall", np.nan))) else "",
+            "Fin≤2": pct0(r.get("pct_fin_le2", np.nan)),
+        })
+    return pd.DataFrame(rows)
+
+def make_player_chart(player: str) -> str:
+    sub = rend[rend["Jugador"] == player].copy()
+    if len(sub) == 0:
+        return ""
+
+    sp = sub[sub["Pared"] == "Sin pared"].copy()
+    top = sub[sub["Pared"] != "Sin pared"].sort_values("N_golpes", ascending=False).head(TOP_WALLS_PER_PLAYER)
+    plot_df = pd.concat([sp, top], ignore_index=True)
+    if len(plot_df) == 0:
+        return ""
+
+    plot_df = plot_df.sort_values("N_golpes", ascending=False)
+
+    labels = [f"{p} (N={int(n)})" for p, n in zip(plot_df["Pared"], plot_df["N_golpes"])]
+    mete = plot_df["Pct_mete"].fillna(0).to_numpy()
+    err  = plot_df["Pct_error"].fillna(0).to_numpy()
+
+    fig = plt.figure(figsize=(7.2, 2.1), dpi=150)
+    ax = fig.add_subplot(111)
+
+    y = np.arange(len(labels))
+    ax.barh(y - 0.18, mete, height=0.35, label="Mete% (consistencia)")
+    ax.barh(y + 0.18, err,  height=0.35, label="Error% (riesgo)")
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_xlim(0, 1.0)
+    ax.set_xlabel("Proporción (0 a 1)", fontsize=8)
+    ax.set_title(f"{player} – Consistencia vs Riesgo por pared (top volumen)", fontsize=10)
+    ax.grid(axis="x", linestyle=":", linewidth=0.5, alpha=0.6)
+    ax.legend(fontsize=8, loc="lower right")
+
+    plt.tight_layout()
+    out_path = os.path.join(tempfile.gettempdir(), f"chart_{player.replace(' ', '_')}.png")
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+# ============
+# Página 2: Top-3 golpes del rival por pared (con conteos)
+# ============
+def make_top3_table(player: str) -> pd.DataFrame:
+    sub = trans_pared[trans_pared["Jugador"] == player].copy()
+    if len(sub) == 0:
+        return pd.DataFrame(columns=["Pared", "n_total", "Rival #1", "Rival #2", "Rival #3"])
+
+    rows = []
+    for pared, g in sub.groupby("Pared_jugador"):
+        g = g.sort_values("Probabilidad", ascending=False)
+        n_total = int(g["Total"].iloc[0]) if len(g) else 0
+
+        top = g.head(TOP3)
+        items = []
+        for _, r in top.iterrows():
+            items.append(f"{r['Golpe_rival_siguiente']} ({pct0(r['Probabilidad'])}, n={int(r['Conteo'])})")
+        while len(items) < TOP3:
+            items.append("")
+
+        rows.append({
+            "Pared": f"{pared}",
+            "n_total": n_total,
+            "Rival #1": items[0],
+            "Rival #2": items[1],
+            "Rival #3": items[2],
+        })
+
+    out = pd.DataFrame(rows).sort_values("n_total", ascending=False)
+    return out
+
+# ============
+# Página 3: Top-3 golpe previo del rival por pared
+# ============
+def make_prev_top3_table(player: str) -> pd.DataFrame:
+    sub = prev_pared[prev_pared["Jugador"] == player].copy()
+    if len(sub) == 0:
+        return pd.DataFrame(columns=["Pared", "n_total", "Previo rival #1", "Previo rival #2", "Previo rival #3"])
+
+    rows = []
+    for pared, g in sub.groupby("Pared_jugador"):
+        g = g.sort_values("Probabilidad", ascending=False)
+        n_total = int(g["Total"].iloc[0]) if len(g) else 0
+
+        # Filtra paredes con muy poca muestra
+        if n_total < MIN_N_CONTEXT:
+            continue
+
+        top = g.head(TOP3)
+        items = []
+        for _, r in top.iterrows():
+            items.append(f"{r['Golpe_rival_previo']} ({pct0(r['Probabilidad'])}, n={int(r['Conteo'])})")
+        while len(items) < TOP3:
+            items.append("")
+
+        rows.append({
+            "Pared": f"{pared}",
+            "n_total": n_total,
+            "Previo rival #1": items[0],
+            "Previo rival #2": items[1],
+            "Previo rival #3": items[2],
+        })
+
+    out = pd.DataFrame(rows).sort_values("n_total", ascending=False)
+    return out
+
+# ============
+# Página 4: Tabla decisión (Sin pared vs Con pared) por bola previa del rival
+# ============
+def make_decision_table(player: str) -> pd.DataFrame:
+    sub = decision_kpi[decision_kpi["Jugador"] == player].copy()
+    if len(sub) == 0:
+        return pd.DataFrame(columns=[
+            "Bola rival previa",
+            "N sin", "Win% sin", "Err% sin",
+            "N con", "Win% con", "Err% con",
+            "Δ Win%"
+        ])
+
+    # agregamos por bola previa (dos decisiones)
+    # nos quedamos con las más frecuentes por N total de golpes
+    totalN = sub.groupby("Bola_rival_previa")["N_golpes"].sum().reset_index(name="N_total")
+    top_prev = totalN.sort_values("N_total", ascending=False).head(TOP_PREV_SHOTS_PAGE4)["Bola_rival_previa"].tolist()
+    sub = sub[sub["Bola_rival_previa"].isin(top_prev)].copy()
+
+    # pivots
+    def pick(df, decision, col):
+        s = df.loc[df["decision"] == decision, col]
+        return s.iloc[0] if len(s) else np.nan
+
+    rows = []
+    for bola, g in sub.groupby("Bola_rival_previa"):
+        n_sin = pick(g, "Sin pared", "N_golpes")
+        n_con = pick(g, "Con pared", "N_golpes")
+
+        # filtra si casi no hay datos
+        if (pd.isna(n_sin) or n_sin < MIN_N_CONTEXT) and (pd.isna(n_con) or n_con < MIN_N_CONTEXT):
+            continue
+
+        win_sin = pick(g, "Sin pared", "Win_pct_pts")
+        win_con = pick(g, "Con pared", "Win_pct_pts")
+
+        err_sin = pick(g, "Sin pared", "Error_pct")
+        err_con = pick(g, "Con pared", "Error_pct")
+
+        delta_win = safe_delta(win_sin, win_con)
+
+        rows.append({
+            "Bola rival previa": bola,
+            "N sin": "" if pd.isna(n_sin) else int(n_sin),
+            "Win% sin": pct0(win_sin),
+            "Err% sin": pct0(err_sin),
+            "N con": "" if pd.isna(n_con) else int(n_con),
+            "Win% con": pct0(win_con),
+            "Err% con": pct0(err_con),
+            "Δ Win%": "" if pd.isna(delta_win) else f"{delta_win*100:+.0f}%",
+        })
+
+    out = pd.DataFrame(rows)
+
+    # ordenar por volumen aproximado (N sin + N con)
+    def vol(row):
+        a = row["N sin"] if isinstance(row["N sin"], int) else 0
+        b = row["N con"] if isinstance(row["N con"], int) else 0
+        return a + b
+
+    if len(out):
+        out["_vol"] = out.apply(vol, axis=1)
+        out = out.sort_values("_vol", ascending=False).drop(columns=["_vol"])
+
+    return out
+
+# -------------------------
+# Construir PDF (4 páginas)
+# -------------------------
+doc = SimpleDocTemplate(OUT_PDF, pagesize=A4, rightMargin=26, leftMargin=26, topMargin=24, bottomMargin=24)
+story = []
+
+# Portada / header breve
+story.append(Paragraph("Informe de partido – Paredes y respuesta del rival", styles["Title"]))
+story.append(Spacer(1, 6))
+story.append(Paragraph(
+    f"Fuente: {PATH}. Puntos: {len(points)}. Golpes etiquetados: {len(strokes)}.",
+    styles["Small"]
+))
+story.append(Spacer(1, 6))
+story.append(Paragraph(
+    "<b>Cómo leer los datos (sin interpretación):</b><br/>"
+    "• <b>Mete%</b>: porcentaje de golpes que entran sin error.<br/>"
+    "• <b>Error%</b>: porcentaje de golpes que terminan en error.<br/>"
+    "• <b>Winner%</b>: porcentaje de golpes ganadores.<br/>"
+    "• <b>Win% pts</b>: % de puntos ganados cuando aparece esa pared en el punto.<br/>"
+    "• <b>Fin≤2</b>: % de veces que el punto termina en ≤2 golpes tras ese golpe.<br/>"
+    "• Un asterisco (*) indica muestra pequeña (N golpes < 10).<br/>"
+    "• Cada panel compara <i>“Sin pared”</i> con las paredes más utilizadas.",
+    styles["Small"]
+))
+story.append(Spacer(1, 10))
+
+# =========================
+# PÁGINA 1
+# =========================
+story.append(Paragraph("Rendimiento por pared (panel por jugador)", styles["Heading1"]))
+story.append(Spacer(1, 8))
+
+for p in players:
+    story.append(Paragraph(f"Jugador: {p}", styles["Heading2"]))
+    tab = make_player_panel_table(p)
+    story.append(df_table(tab, col_widths=[125, 28, 44, 44, 46, 50, 34, 40], font_size=7))
+    story.append(Spacer(1, 6))
+
+    img_path = make_player_chart(p)
+    if img_path and os.path.exists(img_path):
+        story.append(RLImage(img_path, width=500, height=150))
+    else:
+        story.append(Paragraph("Sin datos suficientes para generar gráfico.", styles["Small"]))
+
+    story.append(Spacer(1, 10))
+
+story.append(PageBreak())
+
+# =========================
+# PÁGINA 2
+# =========================
+story.append(Paragraph("Respuesta del rival (Top-3) tras cada pared", styles["Heading1"]))
+story.append(Spacer(1, 6))
+story.append(Paragraph(
+    "Para cada pared (del jugador): se muestra el Top-3 de golpes del rival en el siguiente golpe, con % y conteo. "
+    "n_total es el total de transiciones observadas para esa pared.",
+    styles["Small"]
+))
+story.append(Spacer(1, 8))
+
+for p in players:
+    story.append(Paragraph(f"Jugador: {p}", styles["Heading2"]))
+    t2 = make_top3_table(p)
+    if len(t2) == 0:
+        story.append(Paragraph("Sin transiciones suficientes.", styles["Small"]))
+        story.append(Spacer(1, 8))
+        continue
+    story.append(df_table(t2, col_widths=[120, 45, 140, 140, 140], font_size=7))
+    story.append(Spacer(1, 10))
+
+story.append(PageBreak())
+
+# =========================
+# PÁGINA 3
+# =========================
+story.append(Paragraph("Qué golpe del rival precede a cada pared (Top-3)", styles["Heading1"]))
+story.append(Spacer(1, 6))
+story.append(Paragraph(
+    "Para cada pared del jugador (incluye “Sin pared”): se muestra el Top-3 de golpes del rival inmediatamente anteriores. "
+    "Esto describe en qué bolas suele aparecer cada decisión (dejar entrar vs no).",
+    styles["Small"]
+))
+story.append(Spacer(1, 8))
+
+for p in players:
+    story.append(Paragraph(f"Jugador: {p}", styles["Heading2"]))
+    t3 = make_prev_top3_table(p)
+    if len(t3) == 0:
+        story.append(Paragraph("Sin contexto previo suficiente.", styles["Small"]))
+        story.append(Spacer(1, 8))
+        continue
+    story.append(df_table(t3, col_widths=[120, 45, 140, 140, 140], font_size=7))
+    story.append(Spacer(1, 10))
+
+story.append(PageBreak())
+
+# =========================
+# PÁGINA 4
+# =========================
+story.append(Paragraph("(Con pared) vs jugar antes (Sin pared)", styles["Heading1"]))
+story.append(Spacer(1, 6))
+story.append(Paragraph(
+    "Comparativa por “bola previa del rival” (ej. Bandeja, Volea, Globo): "
+    "se muestran métricas de resultado cuando el jugador responde <b>Sin pared</b> vs <b>Con pared</b>. "
+    "Δ Win% es la diferencia (Con pared − Sin pared). Filtrado para evitar muestras muy pequeñas.",
+    styles["Small"]
+))
+story.append(Spacer(1, 8))
+
+for p in players:
+    story.append(Paragraph(f"Jugador: {p}", styles["Heading2"]))
+    t4 = make_decision_table(p)
+    if len(t4) == 0:
+        story.append(Paragraph("Sin datos suficientes para comparar decisiones por bola previa.", styles["Small"]))
+        story.append(Spacer(1, 8))
+        continue
+
+    story.append(df_table(
+        t4,
+        col_widths=[130, 34, 48, 48, 34, 48, 48, 44],
+        font_size=7
+    ))
+    story.append(Spacer(1, 10))
+
+doc.build(story)
+print(f"\nPDF generado: {OUT_PDF}")
